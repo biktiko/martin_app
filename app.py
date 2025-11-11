@@ -8,13 +8,8 @@ st.set_page_config(page_title="QR Code Analytics", layout="wide")
 # ----------------------------- Data Loading & Prep -----------------------------
 @st.cache_data(show_spinner=False)
 def load_data(path: str) -> pd.DataFrame:
-    dtypes = {
-        "prize_id": "string",
-        "customer_id": "string",
-        "user_id": "string",
-        "region_id": "Int64"
-    }
-    return pd.read_csv(path, dtype=dtypes)
+    df = pd.read_csv(path)
+    return df
 
 df = load_data("qr_code.csv")
 
@@ -96,8 +91,11 @@ if st.sidebar.button("Обновить/очистить кэш данных"):
 
 local_tz = st.sidebar.selectbox("Часовой пояс отображения", ["UTC","Asia/Yerevan"], index=1)
 
-# FIX: фиксированная дата старта для всех графиков/метрик
-START_FROM = pd.Timestamp("2024-09-15")  # 15 сентября 2024
+# --- БЛОК: объявление стартовой даты ---
+# FIX: Жёсткий минимум ВСЕХ графиков и слайдера – 15 сентября 2025
+START_FROM_STR = "2025-09-15"
+# Дата в UTC (полночь). Если нужно другая TZ, отразится ниже при конвертации.
+START_FROM = pd.Timestamp(START_FROM_STR, tz="UTC")
 
 if "win_date" not in df.columns:
     st.error("Колонка win_date отсутствует — временные графики недоступны.")
@@ -115,33 +113,46 @@ def _ensure_tz(dt_obj, tzname):
         return ts.tz_localize(tzname)
     return ts.tz_convert(tzname)
 
-# применяем фиксированную нижнюю границу
-start_dt_local = _ensure_tz(START_FROM, local_tz if local_tz != "UTC" else "UTC")
+# Приводим START_FROM к выбранному часовому поясу
+if local_tz != "UTC":
+    start_dt_local = START_FROM.tz_convert(local_tz)
+else:
+    start_dt_local = START_FROM
+
+# Отрезаем всё раньше жесткой даты
 work = work[work["win_date"] >= start_dt_local]
 
-# Диапазон по win_date (после фиксированной нижней границы)
+# Диапазон по win_date (после жесткой границы)
 if not work.empty:
-    min_w = work["win_date"].min()
-    max_w = work["win_date"].max()
+    actual_min = work["win_date"].min()
+    actual_max = work["win_date"].max()
+
+    # Минимум слайдера: не раньше 15.09.2025 (start_dt_local), но если данных нет до позже — используем фактический actual_min
+    slider_min = max(start_dt_local, actual_min)
+    slider_max = actual_max
+
     win_range = st.sidebar.slider(
-        "Диапазон по win_date",
-        min_value=min_w.to_pydatetime(),
-        max_value=max_w.to_pydatetime(),
-        value=(min_w.to_pydatetime(), max_w.to_pydatetime()),
+        "Диапазон по win_date (≥ 15.09.2025)",
+        min_value=slider_min.to_pydatetime(),
+        max_value=slider_max.to_pydatetime(),
+        value=(slider_min.to_pydatetime(), slider_max.to_pydatetime()),
         format="DD.MM.YYYY"
     )
 
     def _ensure_tz_runtime(dt_obj, tzinfo):
         ts = pd.Timestamp(dt_obj)
-        if ts.tz is None:
+        # локализуем или конвертируем к tzinfo (он уже из данных – UTC или локальный)
+        if ts.tzinfo is None:
             return ts.tz_localize(tzinfo)
         else:
             return ts.tz_convert(tzinfo)
 
-    tzinfo_w = min_w.tz
+    tzinfo_w = slider_min.tz
     w_start = _ensure_tz_runtime(win_range[0], tzinfo_w)
-    w_end = _ensure_tz_runtime(win_range[1], tzinfo_w)
+    w_end   = _ensure_tz_runtime(win_range[1], tzinfo_w)
     work = work[(work["win_date"] >= w_start) & (work["win_date"] <= w_end)]
+else:
+    st.warning("Нет данных после 15.09.2025 в текущих фильтрах.")
 
 # Прочие фильтры
 region_values = sorted(work["region_name"].unique())
