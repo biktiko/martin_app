@@ -8,8 +8,13 @@ st.set_page_config(page_title="QR Code Analytics", layout="wide")
 # ----------------------------- Data Loading & Prep -----------------------------
 @st.cache_data(show_spinner=False)
 def load_data(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path)
-    return df
+    dtypes = {
+        "prize_id": "string",
+        "customer_id": "string",
+        "user_id": "string",
+        "region_id": "Int64"
+    }
+    return pd.read_csv(path, dtype=dtypes)
 
 df = load_data("qr_code.csv")
 
