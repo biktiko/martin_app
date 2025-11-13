@@ -275,6 +275,20 @@ def aggregate_time(df_in: pd.DataFrame, date_field: str, granularity: str, uniqu
 def safe_rate(num, den):
     return (num / den) if den else 0
 
+# NEW: универсальная функция вычисления распределённых статистик (mean, quartiles)
+def span_stats(series: pd.Series):
+    s = pd.to_numeric(series.dropna(), errors="coerce")
+    s = s[~pd.isna(s)]
+    if len(s) == 0:
+        return {"mean": 0.0, "q25": 0.0, "median": 0.0, "q75": 0.0, "count": 0}
+    return {
+        "mean": float(s.mean()),
+        "q25": float(s.quantile(0.25)),
+        "median": float(s.quantile(0.5)),
+        "q75": float(s.quantile(0.75)),
+        "count": int(len(s))
+    }
+
 # ----------------------------- Metrics Summary (всё по win_date) --------------
 st.subheader("Ключевые метрики")
 
@@ -583,9 +597,187 @@ with st.expander("Экспорт агрегированных данных (Time
 # ----------------------------- Help / Интерпретация ---------------------------
 with st.expander("Помощь / Интерпретация"):
     st.markdown("""
-- Все графики и метрики начинаются с 15.09.2024 (фиксированная нижняя граница) и привязаны к win_date.
+- Все графики и метрики начинаются с 15.09.2025 (фиксированная нижняя граница) и привязаны к win_date.
 - Числа в «Ключевых метриках» и «Пользователи: выигрыши и получение» берутся из одной области (metrics_df), поэтому совпадают по смыслу.
 - «Real prizes не выдано» = количество событий is_real_prize_pending.
 - «Ожидают real prize (уник.)» = число уникальных пользователей среди этих событий.
 - Теоретически «Ожидают (уник.)» не может превышать «Не выдано (события)». Если видите иначе — очистите кэш и перезапустите приложение.
 """)
+
+# ----------------------------- Общая статистика -------------------------------
+st.subheader("Общая статистика")
+
+if USER_COL and not metrics_df.empty:
+    # База (win_date уже ограничен фильтрами и нижней границей)
+    base = metrics_df.dropna(subset=["win_date"]).copy()
+
+    # ---------------- A. Суммарные сканы на пользователя ----------------
+    total_scans_per_user = base.groupby(USER_COL).size().rename("total_scans")
+    if len(total_scans_per_user):
+        overall_stats = {
+            "mean": total_scans_per_user.mean(),
+            "q25": total_scans_per_user.quantile(0.25),
+            "median": total_scans_per_user.quantile(0.5),
+            "q75": total_scans_per_user.quantile(0.75),
+            "users": total_scans_per_user.size
+        }
+    else:
+        overall_stats = {"mean": 0, "q25": 0, "median": 0, "q75": 0, "users": 0}
+
+    st.markdown("**A. Суммарные сканы на пользователя (за всё время присутствия)**")
+    c_tot1, c_tot2, c_tot3, c_tot4, c_tot5 = st.columns(5)
+    c_tot1.metric("Всего пользователей", int(overall_stats["users"]))
+    c_tot2.metric("Сканов/пользователь (среднее)", f"{overall_stats['mean']:.2f}")
+    c_tot3.metric("Q1", f"{overall_stats['q25']:.2f}")
+    c_tot4.metric("Медиана", f"{overall_stats['median']:.2f}")
+    c_tot5.metric("Q3", f"{overall_stats['q75']:.2f}")
+
+    with st.expander("Распределение: суммарные сканы на пользователя"):
+        st.dataframe(
+            total_scans_per_user.describe(percentiles=[0.25, 0.5, 0.75]).to_frame(),
+            use_container_width=True
+        )
+        st.download_button(
+            "CSV: total_scans_per_user",
+            total_scans_per_user.reset_index().to_csv(index=False).encode("utf-8"),
+            file_name="total_scans_per_user.csv",
+            mime="text/csv"
+        )
+
+    # ---------------- B. Нормированные показатели по календарному промежутку ----------------
+    rate_basis = st.radio(
+        "База нормализации интервала",
+        ["До последнего собственного скана", "До глобального конца периода"],
+        index=1,
+        horizontal=True
+    )
+
+    global_last_day = base["win_date"].dt.floor("D").max()
+    global_last_week_start = base["win_date"].dt.to_period("W").max().start_time
+    global_first_day = base["win_date"].dt.floor("D").min()
+
+    per_user_first = base.groupby(USER_COL)["win_date"].min().to_frame(name="first_win")
+    per_user_first["first_day"] = per_user_first["first_win"].dt.floor("D")
+    per_user_first["first_week_start"] = per_user_first["first_win"].dt.to_period("W").dt.start_time
+
+    if rate_basis == "До последнего собственного скана":
+        per_user_last = base.groupby(USER_COL)["win_date"].max().to_frame(name="last_win")
+        per_user_span = per_user_first.join(per_user_last)
+        per_user_span["last_day"] = per_user_span["last_win"].dt.floor("D")
+        per_user_span["last_week_start"] = per_user_span["last_win"].dt.to_period("W").dt.start_time
+    else:
+        per_user_span = per_user_first.copy()
+        per_user_span["last_win"] = global_last_day
+        per_user_span["last_day"] = global_last_day
+        per_user_span["last_week_start"] = global_last_week_start
+
+    per_user_span["span_days"] = (per_user_span["last_day"] - per_user_span["first_day"]).dt.days + 1
+    per_user_span["span_weeks"] = ((per_user_span["last_week_start"] - per_user_span["first_week_start"]).dt.days // 7) + 1
+
+    per_user_span = per_user_span.join(total_scans_per_user)
+
+    per_user_span["span_days"] = per_user_span["span_days"].where(per_user_span["span_days"] > 0, 1)
+    per_user_span["span_weeks"] = per_user_span["span_weeks"].where(per_user_span["span_weeks"] > 0, 1)
+
+    per_user_span["daily_rate_span"] = per_user_span["total_scans"] / per_user_span["span_days"]
+    per_user_span["weekly_rate_span"] = per_user_span["total_scans"] / per_user_span["span_weeks"]
+
+    # === Полные недели (Monday-Sunday полностью внутри интервала) ===
+    def _count_full_weeks(row):
+        first_day = row["first_day"]
+        last_day = row["last_day"]
+        if pd.isna(first_day) or pd.isna(last_day):
+            return 0
+        week_starts = pd.date_range(first_day, last_day, freq="W-MON")
+        if len(week_starts) == 0:
+            if first_day.weekday() == 0 and (first_day + pd.Timedelta(days=6)) <= last_day:
+                return 1
+            return 0
+        full = ((week_starts + pd.Timedelta(days=6)) <= last_day).sum()
+        if full == 0 and first_day.weekday() == 0 and (first_day + pd.Timedelta(days=6)) <= last_day:
+            return 1
+        return int(full)
+
+    per_user_span["full_weeks"] = per_user_span.apply(_count_full_weeks, axis=1)
+
+    # weekly_rate_full_weeks: NA если нет ни одной полной недели (чтобы не искажать средние нулями)
+    per_user_span["weekly_rate_full_weeks"] = per_user_span.apply(
+        lambda r: (r["total_scans"] / r["full_weeks"]) if r["full_weeks"] > 0 else pd.NA, axis=1
+    )
+
+    # ---- Статистики
+    daily_span_stats = span_stats(per_user_span["daily_rate_span"])
+    weekly_span_stats = span_stats(per_user_span["weekly_rate_span"])
+    weekly_full_stats = span_stats(per_user_span["weekly_rate_full_weeks"])
+
+    # Глобальные агрегированные скорости
+    total_scans_sum = int(total_scans_per_user.sum())
+    aggregated_daily_rate = safe_rate(total_scans_sum, per_user_span["span_days"].sum())
+    aggregated_weekly_rate = safe_rate(total_scans_sum, per_user_span["span_weeks"].sum())
+
+    # days_per_week_span (для прозрачности старого метода)
+    per_user_span["days_per_week_span"] = per_user_span["span_days"] / per_user_span["span_weeks"]
+    ratio_stats = span_stats(per_user_span["days_per_week_span"])
+
+    with st.expander("Старый недельный подсчёт (включая неполные недели)"):
+        st.write("Старые недельные метрики учитывали первую/последнюю неполную неделю как целую.")
+        old_week_stats = weekly_span_stats  # из ранее
+        c_ow1, c_ow2, c_ow3, c_ow4, c_ow5 = st.columns(5)
+        c_ow1.metric("Сканы/неделю (старый mean)", f"{old_week_stats['mean']:.2f}")
+        c_ow2.metric("Q1 (старый)", f"{old_week_stats['q25']:.2f}")
+        c_ow3.metric("Median (старый)", f"{old_week_stats['median']:.2f}")
+        c_ow4.metric("Q3 (старый)", f"{old_week_stats['q75']:.2f}")
+        c_ow5.metric("Пользователей", int(old_week_stats['count']))
+        st.caption("Разница появляется из-за игнорирования неполных недель в новом расчёте.")
+
+    # Глобальные агрегаты по полным неделям
+    total_full_weeks = per_user_span["full_weeks"].sum()
+    aggregated_weekly_full = (total_scans_sum / total_full_weeks) if total_full_weeks else 0
+
+    with st.expander("Глобальные агрегированные скорости"):
+        c_g1, c_g2, c_g3 = st.columns(3)
+        c_g1.metric("Σ scans / Σ span_days (daily agg)", f"{aggregated_daily_rate:.4f}")
+        c_g2.metric("Σ scans / Σ full_weeks (weekly full agg)", f"{aggregated_weekly_full:.4f}")
+        c_g3.metric("Σ scans / Σ span_weeks (старый weekly agg)", f"{aggregated_weekly_rate:.4f}")
+        st.caption("Сравнение: недельная 'full' использует только полностью заполненные Monday–Sunday недели. Старая — включает крайние неполные.")
+    
+    with st.expander("Детализация per-user (интервалы)"):
+        show_cols = [
+            "first_win","last_win","span_days","span_weeks","full_weeks",
+            "total_scans","daily_rate_span","weekly_rate_full_weeks","weekly_rate_span"
+        ]
+        st.dataframe(per_user_span[show_cols].sort_values("first_win"), use_container_width=True, height=520)
+        st.download_button(
+            "CSV: per_user_interval_rates_full_weeks",
+            per_user_span.reset_index()[show_cols].to_csv(index=False).encode("utf-8"),
+            file_name="per_user_interval_rates_full_weeks.csv",
+            mime="text/csv"
+        )
+
+    # ===== ВЫВОД МЕТРИК БЛОКА B (добавлено) =====
+    basis_label = "глобальному концу периода" if rate_basis == "До глобального конца периода" else "собственному последнему скану"
+    st.markdown(f"**B. Средние сканы на пользователя (интервал: от первого скана до {basis_label})**")
+
+    # Статистика по дневным скоростям
+    c_ds1, c_ds2, c_ds3, c_ds4, c_ds5 = st.columns(5)
+    c_ds1.metric("Сканы/день (mean)", f"{daily_span_stats['mean']:.2f}")
+    c_ds2.metric("Q1 день", f"{daily_span_stats['q25']:.2f}")
+    c_ds3.metric("Медиана день", f"{daily_span_stats['median']:.2f}")
+    c_ds4.metric("Q3 день", f"{daily_span_stats['q75']:.2f}")
+    c_ds5.metric("Пользователей", int(daily_span_stats['count']))
+
+    # Статистика по ПОЛНЫМ неделям
+    c_fw1, c_fw2, c_fw3, c_fw4, c_fw5 = st.columns(5)
+    c_fw1.metric("Сканы/неделю (полные, mean)", f"{weekly_full_stats['mean']:.2f}")
+    c_fw2.metric("Q1 неделя (полные)", f"{weekly_full_stats['q25']:.2f}")
+    c_fw3.metric("Медиана неделя (полные)", f"{weekly_full_stats['median']:.2f}")
+    c_fw4.metric("Q3 неделя (полные)", f"{weekly_full_stats['q75']:.2f}")
+    c_fw5.metric("Пользователей (полные)", int(weekly_full_stats['count']))
+
+    # Коэффициент дней в неделе (для понимания старого weekly_rate_span)
+    ratio_mean = ratio_stats['mean']
+    st.caption(f"Среднее эффективное число дней в одной 'span неделе' (старый подход): {ratio_mean:.2f}")
+
+    # ===== КОНЕЦ ДОБАВЛЕННОГО ВЫВОДА =====
+else:
+    st.info("Нужен идентификатор пользователя и непустая область метрик для общей статистики.")
