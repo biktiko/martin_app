@@ -1,28 +1,25 @@
--- Пользователи региона 2, у которых НИ ОДИН реальный приз в регионе 2 не был получен
 SELECT
-  Distinct(q.customer_id),
-  Distinct(c.phone_number) AS phone74),
+  q.customer_id,
+  c.phone_number AS phone,
+  MAX(c.first_name) AS first_name,         -- take any non-null name
+  COUNT(*) FILTER (
+    WHERE q.win_date IS NOT NULL
+      AND q.region_id = 2
+  ) AS scans,
   COUNT(*) FILTER (
     WHERE q.win_date IS NOT NULL
       AND q.prize_id IS NOT NULL
       AND q.region_id = 2
       AND q.is_win_received = FALSE
   ) AS pending_cnt,
-  COUNT(*) FILTER (
-    WHERE q.win_date IS NOT NULL
-      AND q.prize_id IS NOT NULL
-      AND q.region_id = 2
-      AND q.is_win_received = TRUE
-  ) AS received_cnt,
   MAX(
     CASE
       WHEN q.win_date IS NOT NULL
        AND q.prize_id IS NOT NULL
        AND q.region_id = 2
-       AND q.is_win_received = TRUE
       THEN q.win_date
     END
-  ) AS last_received_at
+  ) AS last_prize_at           -- last prize date in region 2
 FROM public.qr_code AS q
 LEFT JOIN public.customer AS c
   ON c.id = q.customer_id
@@ -35,11 +32,21 @@ HAVING
       AND q.region_id = 2
   ) > 0
   AND
-  -- и ни одного полученного в регионе 2
+  -- ни одного полученного приза в регионе 2
   COUNT(*) FILTER (
     WHERE q.win_date IS NOT NULL
       AND q.prize_id IS NOT NULL
       AND q.region_id = 2
       AND q.is_win_received = TRUE
   ) = 0
+  AND
+  -- последний реальный приз в регионе 2 был более 15 дней назад
+  MAX(
+    CASE
+      WHEN q.win_date IS NOT NULL
+       AND q.prize_id IS NOT NULL
+       AND q.region_id = 2
+      THEN q.win_date
+    END
+  ) < CURRENT_DATE - INTERVAL '15 days'
 ORDER BY pending_cnt DESC, q.customer_id;
