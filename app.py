@@ -74,12 +74,18 @@ except Exception as e:
     st.error(f"Ошибка подключения к PostgreSQL: {e}")
 
 # ----------------------------- Data Loading & Prep -----------------------------
+st.sidebar.header("Загрузка данных")
+uploaded_file = st.sidebar.file_uploader("Выберите CSV файл", type="csv")
+
 @st.cache_data(show_spinner=False)
-def load_data(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path)
+def load_data(source) -> pd.DataFrame:
+    df = pd.read_csv(source)
     return df
 
-df = load_data("qr_code.csv")
+if uploaded_file is not None:
+    df = load_data(uploaded_file)
+else:
+    df = load_data("qr_code.csv")
 
 # Identify date columns
 DATE_COLS = [
@@ -414,7 +420,7 @@ with st.expander("DEBUG Time Series"):
     st.write("Real prizes tail:", ts_real.tail(5))
 
 # ----------------------------- Users: winners / received / pending ------------
-st.subheader("Пользователи: выигрыши и получение (синхронизировано с метриками)")
+st.subheader("Пользователи: выигрыши и получение")
 
 if USER_COL:
     users_won_any = metrics_df.loc[metrics_df["has_win"], USER_COL].dropna().nunique()
