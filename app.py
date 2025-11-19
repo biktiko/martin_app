@@ -8,6 +8,30 @@ import datetime as dt
 
 st.set_page_config(page_title="QR Code Analytics", layout="wide")
 
+# --- Authentication ---
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = False
+
+def check_password():
+    # Secrets are nested under [auth] in secrets.toml
+    auth = st.secrets.get("auth", {})
+    login = auth.get("login", None)
+    password = auth.get("password", None)
+
+    if st.session_state["username"] == login and st.session_state["password"] == password:
+        st.session_state["authenticated"] = True
+        del st.session_state["password"]
+        del st.session_state["username"]
+    else:
+        st.error("Неверный логин или пароль")
+
+if not st.session_state["authenticated"]:
+    st.title("Вход в систему")
+    st.text_input("Логин", key="username")
+    st.text_input("Пароль", type="password", key="password")
+    st.button("Войти", on_click=check_password)
+    st.stop()
+
 @st.cache_resource(show_spinner=False)
 def get_pg_engine() -> Engine:
     ssh = st.secrets.get("ssh", None)

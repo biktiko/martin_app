@@ -35,6 +35,7 @@ def simulate_goose(
     weekly_pts: float,
     stages: dict[str, StageSpec],
     accrual_mode: str = "daily",  # "daily" or "weekly"
+    weekly_value_mode: str = "points",  # "points" or "feeds"
     start_stage: str = "small",
     start_hunger: int = 3,
     start_size: int = 1,
@@ -58,13 +59,33 @@ def simulate_goose(
 
     daily_income = weekly_pts / 7.0
 
+    # Weekly feeding plan (only used when weekly_value_mode == "feeds")
+    weekly_feed_plan: list[int] | None = None
+    if weekly_value_mode == "feeds":
+        total_feeds = max(0, int(round(weekly_pts)))
+        baseline = 1 if visit_daily else 0
+        # start with baseline per day
+        plan = [baseline for _ in range(7)]
+        extras = max(0, total_feeds - baseline * 7)
+        # fill extras from Monday forward, respecting daily cap = 1 + max_paid_feeds_per_day
+        i = 0
+        while extras > 0 and i < 7:
+            cap_today = baseline + max(0, int(max_paid_feeds_per_day)) + 0  # total feeds allowed today
+            can_add = max(0, cap_today - plan[i])
+            add_now = min(extras, can_add)
+            plan[i] += add_now
+            extras -= add_now
+            i += 1
+        weekly_feed_plan = plan
+
     for day in range(1, max_days + 1):
-        # Начисление очков
-        if accrual_mode == "daily":
-            wallet += daily_income
-        else:
-            if day == 1 or ((day - 1) % 7 == 0):
-                wallet += weekly_pts
+        # Начисление очков (только для режима валюты)
+        if weekly_value_mode == "points":
+            if accrual_mode == "daily":
+                wallet += daily_income
+            else:
+                if day == 1 or ((day - 1) % 7 == 0):
+                    wallet += weekly_pts
 
         # Суточное снижение голода до визита
         hunger -= spec().daily_hunger_loss
@@ -84,16 +105,25 @@ def simulate_goose(
         stage_up_label = ""
 
         if visit_daily:
-            max_feeds_today = 1 + max(0, int(max_paid_feeds_per_day))
+            if weekly_value_mode == "feeds" and weekly_feed_plan is not None:
+                target_feeds_today = weekly_feed_plan[(day - 1) % 7]
+                max_feeds_today = target_feeds_today
+            else:
+                max_feeds_today = 1 + max(0, int(max_paid_feeds_per_day))
 
             # Жадная стратегия: кормим пока можем платить за следующую и пока есть смысл
             while feeds_today < max_feeds_today:
                 next_cost = max(0, feeds_today)  # 1-я кормёжка = 0, далее 1,2,3...
-                if next_cost > 0 and wallet + 1e-9 < next_cost:
-                    break
-                if next_cost > 0:
-                    wallet -= next_cost
-                    paid_spent += next_cost
+                if weekly_value_mode == "points":
+                    if next_cost > 0 and wallet + 1e-9 < next_cost:
+                        break
+                    if next_cost > 0:
+                        wallet -= next_cost
+                        paid_spent += next_cost
+                else:
+                    # В режиме "feeds" кошелёк не ограничивает, но считаем гипотетические затраты
+                    if next_cost > 0:
+                        paid_spent += next_cost
 
                 # Рост размера: происходит, если ПЕРЕД кормлением желудок полный
                 if hunger >= spec().hunger_cap and size < spec().size_cap:
@@ -177,15 +207,20 @@ with st.sidebar:
     ad_scap  = colB.number_input("Adult size cap", 1, 300, value=DEFAULT_STAGES["adult"].size_cap)
     ad_loss  = colC.number_input("Adult daily loss", 0, 10, value=DEFAULT_STAGES["adult"].daily_hunger_loss)
 
-    stage_bonus = st.checkbox("Начислять бонус очков за Stage-Up (+5 small→medium, +10 medium→adult)", value=True)
+    stage_bonus = st.checkbox("Начислять бонус очков за Stage-Up", value=True)
+    colB1, colB2 = st.columns(2)
+    bonus_s_to_m = colB1.number_input("Бонус small→medium", 0, 100, value=5)
+    bonus_m_to_a = colB2.number_input("Бонус medium→adult", 0, 100, value=10)
 
     st.header("Стартовые значения")
     start_hunger = st.number_input("Начальный hunger", 0, 100, value=3)
     start_size   = st.number_input("Начальный size", 0, 300, value=1)
 
     st.header("Доход очков")
-    weekly_pts = st.number_input("Очков в неделю", 0.0, 1000.0, value=2.0, step=0.5)
-    accrual_mode = st.radio("Начисление очков", ["Ежедневно равными долями", "Раз в неделю (понедельник)"], index=0)
+    weekly_pts = st.number_input("Недельное значение", 0.0, 1000.0, value=2.0, step=0.5, help="В зависимости от режима ниже: очки (валюта) или количество кормлений в неделю")
+    value_mode = st.radio("Тип недельного значения", ["Очки (валюта)", "Кормления (шт.)"], index=0)
+    value_mode_key = "points" if value_mode.startswith("Очки") else "feeds"
+    accrual_mode = st.radio("Распределение по времени (для очков)", ["Ежедневно равными долями", "Раз в неделю (понедельник)"], index=0, help="Применяется только если выбран режим Очки (валюта)")
     accrual_mode_key = "daily" if accrual_mode.startswith("Еже") else "weekly"
 
     st.header("Кормление")
@@ -195,8 +230,8 @@ with st.sidebar:
 
 # Build stage specs from sidebar
 stages = {
-    "small":  StageSpec("small",  small_hcap, small_scap, small_loss, stageup_bonus_pts=5),
-    "medium": StageSpec("medium", med_hcap,   med_scap,   med_loss,   stageup_bonus_pts=10),
+    "small":  StageSpec("small",  small_hcap, small_scap, small_loss, stageup_bonus_pts=(bonus_s_to_m if stage_bonus else 0)),
+    "medium": StageSpec("medium", med_hcap,   med_scap,   med_loss,   stageup_bonus_pts=(bonus_m_to_a if stage_bonus else 0)),
     "adult":  StageSpec("adult",  ad_hcap,    ad_scap,    ad_loss,    stageup_bonus_pts=0),
 }
 
@@ -205,6 +240,7 @@ df, summary = simulate_goose(
     weekly_pts=weekly_pts,
     stages=stages,
     accrual_mode=accrual_mode_key,
+    weekly_value_mode=value_mode_key,
     start_stage="small",
     start_hunger=start_hunger,
     start_size=start_size,
@@ -260,6 +296,7 @@ with tab3:
             weekly_pts=float(r),
             stages=stages,
             accrual_mode=accrual_mode_key,
+            weekly_value_mode=value_mode_key,
             start_stage="small",
             start_hunger=start_hunger,
             start_size=start_size,

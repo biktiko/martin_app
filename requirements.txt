@@ -2,6 +2,3 @@ streamlit
 pandas
 altair
 sqlalchemy
-psycopg2-binary
-paramiko
-sshtunnel
