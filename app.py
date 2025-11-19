@@ -51,7 +51,62 @@ USER_LABEL = USER_COL
 
 local_tz = st.sidebar.selectbox("Часовой пояс отображения", ["UTC","Asia/Yerevan"], index=1)
 
-# --- Date Filtering ---
+# --- 1. Global Segmentation (Pre-Filter) ---
+if USER_COL:
+    # Calculate global frequency for segmentation based on FULL data
+    user_freq = df.groupby(USER_COL).size()
+    def _get_segment(c):
+        if c == 1: return "Novice (1 scan)"
+        elif c <= 5: return "Active (2-5 scans)"
+        else: return "Power User (6+ scans)"
+    
+    # Map to dataframe
+    # Use map for speed, fillna for safety
+    df["user_segment"] = df[USER_COL].map(user_freq).fillna(0).apply(_get_segment)
+else:
+    df["user_segment"] = "Unknown"
+
+# --- 2. Global Filters (Create filtered_df) ---
+filtered_df = df.copy()
+
+# A. Region Filter
+if "region_name" in filtered_df.columns:
+    region_values = sorted([x for x in filtered_df["region_name"].unique() if pd.notna(x)])
+    selected_regions = st.sidebar.multiselect("Регионы", region_values, default=region_values)
+    if selected_regions:
+        filtered_df = filtered_df[filtered_df["region_name"].isin(selected_regions)]
+
+# B. Prize ID Filter (NEW)
+if "prize_id" in filtered_df.columns:
+    all_prizes = filtered_df["prize_id"].dropna().unique()
+    # Convert to string for sorting/display consistency
+    all_prizes_list = sorted([str(p) for p in all_prizes])
+    if all_prizes_list:
+        selected_prizes = st.sidebar.multiselect("Фильтр по prize_id", all_prizes_list, default=[])
+        if selected_prizes:
+            # Filter converting column to string to match selection
+            filtered_df = filtered_df[filtered_df["prize_id"].astype(str).isin(selected_prizes)]
+
+# C. User Segment Filter (NEW)
+if USER_COL:
+    all_segments = sorted(filtered_df["user_segment"].unique())
+    selected_segments = st.sidebar.multiselect("Сегмент пользователей", all_segments, default=[])
+    if selected_segments:
+        filtered_df = filtered_df[filtered_df["user_segment"].isin(selected_segments)]
+
+# D. Win Type Filter
+win_type_values = ["real_prize","points","no_win"]
+selected_win_types = st.sidebar.multiselect("Тип выигрыша", win_type_values, default=win_type_values)
+filtered_df = filtered_df[filtered_df["win_type"].isin(selected_win_types)]
+
+# E. Received Filter
+received_filter = st.sidebar.selectbox("Получение приза (is_win_received)", ["Все","Только получен","Не получен"])
+if received_filter == "Только получен":
+    filtered_df = filtered_df[filtered_df["is_win_received"]]
+elif received_filter == "Не получен":
+    filtered_df = filtered_df[~filtered_df["is_win_received"]]
+
+# --- 3. Date Filtering (Create work) ---
 # Hardcoded start date
 START_FROM_STR = "2025-09-15"
 START_FROM = pd.Timestamp(START_FROM_STR, tz="UTC")
@@ -60,14 +115,12 @@ if "win_date" not in df.columns:
     st.error("Колонка win_date отсутствует — временные графики недоступны.")
     st.stop()
 
-# Prepare working dataset for filtering
-work = df.copy()
+# Prepare working dataset from filtered_df
+work = filtered_df.copy()
 work = work.dropna(subset=["win_date"])
+
 if local_tz != "UTC":
     work["win_date"] = work["win_date"].dt.tz_convert(local_tz)
-
-# Ensure TZ for start date
-if local_tz != "UTC":
     start_dt_local = START_FROM.tz_convert(local_tz)
 else:
     start_dt_local = START_FROM
@@ -96,7 +149,6 @@ if not work.empty:
     )
 
     # Apply slider filter
-    # Helper to ensure tz match
     def _ensure_tz_runtime(dt_obj, tzinfo):
         ts = pd.Timestamp(dt_obj)
         if ts.tzinfo is None:
@@ -111,31 +163,17 @@ if not work.empty:
 else:
     st.warning("Нет данных после 15.09.2025 в текущих фильтрах.")
 
-# Other Filters
-region_values = sorted(work["region_name"].unique())
-selected_regions = st.sidebar.multiselect("Регионы", region_values, default=region_values)
-work = work[work["region_name"].isin(selected_regions)]
-
-win_type_values = ["real_prize","points","no_win"]
-selected_win_types = st.sidebar.multiselect("Тип выигрыша", win_type_values, default=win_type_values)
-work = work[work["win_type"].isin(selected_win_types)]
-
-received_filter = st.sidebar.selectbox("Получение приза (is_win_received)", ["Все","Только получен","Не получен"])
-if received_filter == "Только получен":
-    work = work[work["is_win_received"]]
-elif received_filter == "Не получен":
-    work = work[~work["is_win_received"]]
-
 # Aggregation Settings (for Basic Analytics)
 mode_unique = st.sidebar.toggle("Считать уникальных пользователей (вместо событий)", value=False)
 gran = st.sidebar.radio("Гранулярность", ["Day","Week","Month"], horizontal=True)
 
 # Metrics Scope
-metrics_scope = st.sidebar.radio("Область метрик", ["Текущий срез", "Вся база"], index=0)
+metrics_scope = st.sidebar.radio("Область метрик", ["Текущий срез", "Вся база (с учетом фильтров)"], index=0)
 if metrics_scope == "Текущий срез":
     metrics_df = work
 else:
-    metrics_df = df.copy()
+    # Use filtered_df instead of raw df to respect Region/Prize/Segment filters
+    metrics_df = filtered_df.copy()
     metrics_df = metrics_df.dropna(subset=["win_date"])
     if local_tz != "UTC":
         metrics_df["win_date"] = metrics_df["win_date"].dt.tz_convert(local_tz)
@@ -163,7 +201,7 @@ with tab_basic:
 
 with tab_advanced:
     render_advanced_analytics(
-        df=df,
+        df=filtered_df,
         work=work,
         metrics_df=metrics_df,
         USER_COL=USER_COL,
