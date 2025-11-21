@@ -4,7 +4,7 @@ import datetime as dt
 
 # Imports from our new modules
 from utils.auth import require_auth
-from utils.db import check_db_connection
+# from utils.db import check_db_connection
 from utils.data import load_data, process_data, get_user_col
 from tabs.basic_analytics import render_basic_analytics
 from tabs.advanced_analytics import render_advanced_analytics
@@ -210,4 +210,4 @@ with tab_advanced:
 
 # ----------------------------- Footer / DB Check ------------------------------
 st.divider()
-check_db_connection()
+# check_db_connection()
