@@ -117,7 +117,11 @@ def render_advanced_analytics(df, work, metrics_df, USER_COL, local_tz):
     st.subheader("4. Эффективность призов")
     
     if "prize_id" in df.columns:
-        prize_stats = df[df["is_real_prize"]].groupby("prize_id").agg(
+        group_cols = ["prize_id"]
+        if "prize_name" in df.columns:
+            group_cols.append("prize_name")
+
+        prize_stats = df[df["is_real_prize"]].groupby(group_cols).agg(
             total_won=("prize_id", "count"),
             total_received=("is_win_received", "sum")
         ).reset_index()

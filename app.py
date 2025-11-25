@@ -16,6 +16,9 @@ st.set_page_config(page_title="QR Code Analytics", layout="wide")
 require_auth()
 
 # ----------------------------- Sidebar & Data Loading -------------------------
+# Placeholder for data freshness (top of sidebar)
+sidebar_top = st.sidebar.empty()
+
 st.sidebar.header("Загрузка данных")
 uploaded_file = st.sidebar.file_uploader("Выберите CSV файл", type="csv")
 
@@ -23,6 +26,7 @@ uploaded_file = st.sidebar.file_uploader("Выберите CSV файл", type="
 if st.sidebar.button("Обновить/очистить кэш данных"):
     load_data.clear()
     st.rerun()
+
 
 # Load raw data
 if uploaded_file is not None:
@@ -32,6 +36,16 @@ else:
 
 # Process data (add derived columns)
 df = process_data(raw_df.copy())
+
+# Enrich with prize names
+from utils.prizes import enrich_with_prize_name
+df = enrich_with_prize_name(df)
+
+# Show data freshness
+if "win_date" in df.columns and not df.empty:
+    last_date = df["win_date"].max()
+    if pd.notna(last_date):
+        sidebar_top.info(f"Актуальность данных: {last_date.strftime('%d.%m.%Y %H:%M')}")
 
 # ----------------------------- Global Settings & Filters ----------------------
 st.sidebar.header("Фильтры")

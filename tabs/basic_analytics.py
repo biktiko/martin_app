@@ -162,32 +162,47 @@ def render_basic_analytics(df, work, metrics_df, USER_COL, USER_LABEL, local_tz,
     st.subheader("Вероятности по каждому prize_id")
 
     den_scans = len(metrics_df)
+    group_cols = ["prize_id"]
+    if "prize_name" in metrics_df.columns:
+        group_cols.append("prize_name")
+
     real_by_prize = (
         metrics_df[metrics_df["is_real_prize"]]
-        .groupby("prize_id")
+        .groupby(group_cols)
         .size()
         .reset_index(name="real_prize_count")
         .sort_values("real_prize_count", ascending=False)
     )
     if not real_by_prize.empty:
         total_real = int(real_by_prize["real_prize_count"].sum())
-        received_by_prize = (
+        
+        # For received count, we also need to group by same cols or just merge on prize_id
+        # Merging on prize_id is safer/easier if we just want counts
+        received_counts = (
             metrics_df[metrics_df["is_real_prize_received"]]
             .groupby("prize_id")
             .size()
-            .reindex(real_by_prize["prize_id"])
-            .fillna(0)
-            .astype(int)
             .reset_index(name="received_count")
         )
-        prob_df = real_by_prize.merge(received_by_prize, on="prize_id", how="left")
+        
+        prob_df = real_by_prize.merge(received_counts, on="prize_id", how="left").fillna({"received_count": 0})
+        prob_df["received_count"] = prob_df["received_count"].astype(int)
+        
         prob_df["p_per_scan"] = prob_df["real_prize_count"] / max(den_scans, 1)
         prob_df["share_among_real"] = prob_df["real_prize_count"] / max(total_real, 1)
         prob_df["received_share_in_prize"] = prob_df["received_count"] / prob_df["real_prize_count"]
+        
         show_cols = prob_df.copy()
         for c in ["p_per_scan","share_among_real","received_share_in_prize"]:
             show_cols[c] = (show_cols[c] * 100).round(3)
-        st.dataframe(show_cols, use_container_width=True)
+            
+        # Reorder columns to put prize_name next to prize_id
+        cols_order = ["prize_id"]
+        if "prize_name" in show_cols.columns:
+            cols_order.append("prize_name")
+        cols_order.extend(["real_prize_count", "received_count", "p_per_scan", "share_among_real", "received_share_in_prize"])
+        
+        st.dataframe(show_cols[cols_order], use_container_width=True)
         st.download_button(
             "Скачать вероятности по prize_id (CSV)",
             prob_df.to_csv(index=False).encode("utf-8"),
@@ -236,23 +251,140 @@ def render_basic_analytics(df, work, metrics_df, USER_COL, USER_LABEL, local_tz,
     st.subheader("История пользователя")
 
     if USER_COL and not work.empty:
-        user_list = sorted(work[USER_COL].dropna().unique())
-        col_uh1, col_uh2 = st.columns([2,1])
-        selected_user = col_uh1.selectbox("Выбери пользователя", user_list if len(user_list) <= 5000 else [],
-                                          index=0 if len(user_list) else None,
-                                          help="Если список слишком большой, используй поле справа.")
-        manual_user = col_uh2.text_input(f"Или введи {USER_LABEL} вручную")
-        if manual_user:
-            if work[USER_COL].dtype.kind in ("i","u"):
-                try:
-                    manual_id_cast = int(manual_user)
-                except:
-                    manual_id_cast = manual_user
+        # Define search columns
+        search_cols = [USER_COL]
+        possible_extras = ["phone_number", "first_name", "last_name"]
+        extra_cols = [c for c in possible_extras if c in work.columns]
+        all_search_cols = search_cols + extra_cols
+
+        # Create a lookup for the dropdown
+        # We take unique users by USER_COL, but keep the extra info
+        # Optimization: Only build the expensive labels if we are going to show the dropdown
+        unique_users_count = work[USER_COL].nunique()
+        
+        user_labels = []
+        label_to_id = {}
+        
+        if unique_users_count <= 5000:
+            unique_users_df = work.drop_duplicates(subset=[USER_COL])[all_search_cols].copy()
+            
+            # Vectorized label building is hard with variable columns, but we can try to be faster than row-apply
+            # Or just accept apply for < 5000 rows (it's fast enough).
+            # But let's optimize slightly by pre-converting to string
+            
+            for c in all_search_cols:
+                unique_users_df[c] = unique_users_df[c].astype(str).replace(["nan", "None"], "")
+            
+            def _build_label_fast(row):
+                # row is now all strings
+                parts = [row[USER_COL]]
+                extras = [row[c] for c in extra_cols if row[c].strip()]
+                if extras:
+                    parts.append(", ".join(extras))
+                return " | ".join(parts)
+
+            unique_users_df["_display_label"] = unique_users_df.apply(_build_label_fast, axis=1)
+            unique_users_df = unique_users_df.sort_values("_display_label")
+            
+            label_to_id = dict(zip(unique_users_df["_display_label"], unique_users_df[USER_COL]))
+            user_labels = unique_users_df["_display_label"].tolist()
+
+        # --- Search / Selection UI ---
+        
+        # 1. Dropdown (Selection from list)
+        # Only show if list is manageable
+        options = user_labels if len(user_labels) <= 5000 else []
+        
+        st.markdown("##### Выбор пользователя")
+        col_sel, col_mode = st.columns([3, 1])
+        selected_label = col_sel.selectbox(
+            "Выбрать из списка", 
+            options,
+            index=0 if options else None,
+            help="Если список пуст (>5000), используйте поиск ниже.",
+            key="user_select_dropdown"
+        )
+        
+        # 2. Search Inputs
+        st.markdown("##### Поиск (фильтры)")
+        match_mode = col_mode.radio("Режим поиска", ["Точное (быстро)", "Частичное"], index=0, help="Точное совпадение работает быстрее.")
+        is_exact = (match_mode == "Точное (быстро)")
+        
+        c_s1, c_s2, c_s3 = st.columns(3)
+        s_id = c_s1.text_input("Поиск по ID", key="search_id")
+        s_phone = c_s2.text_input("Поиск по телефону", key="search_phone") if "phone_number" in work.columns else None
+        s_name = c_s3.text_input("Поиск по имени", key="search_name") if ("first_name" in work.columns or "last_name" in work.columns) else None
+        
+        user_id_value = None
+        
+        # Search Logic
+        search_active = any([s_id, s_phone, s_name])
+        
+        if search_active:
+            # Start with all True
+            mask = pd.Series(True, index=work.index)
+            
+            # 1. ID Search
+            if s_id:
+                s_id = s_id.strip()
+                if is_exact:
+                    # Try to match types for speed
+                    if pd.api.types.is_numeric_dtype(work[USER_COL]):
+                        try:
+                            # Try int first if it looks like int
+                            if s_id.isdigit():
+                                val = int(s_id)
+                            else:
+                                val = float(s_id)
+                            mask &= (work[USER_COL] == val)
+                        except:
+                            # Input not numeric, col is numeric -> no match
+                            mask &= False
+                    else:
+                        # String exact match
+                        mask &= (work[USER_COL].astype(str) == s_id)
+                else:
+                    # Partial match
+                    mask &= work[USER_COL].astype(str).str.contains(s_id, case=False, na=False)
+            
+            # 2. Phone Search
+            if s_phone and "phone_number" in work.columns:
+                s_phone = s_phone.strip()
+                if is_exact:
+                    mask &= (work["phone_number"].astype(str) == s_phone)
+                else:
+                    mask &= work["phone_number"].astype(str).str.contains(s_phone, case=False, na=False)
+            
+            # 3. Name Search
+            if s_name:
+                s_name = s_name.strip()
+                name_cols = [c for c in ["first_name", "last_name"] if c in work.columns]
+                if name_cols:
+                    name_mask = pd.Series(False, index=work.index)
+                    for c in name_cols:
+                        if is_exact:
+                            name_mask |= (work[c].astype(str).str.lower() == s_name.lower())
+                        else:
+                            name_mask |= work[c].astype(str).str.contains(s_name, case=False, na=False)
+                    mask &= name_mask
+            
+            found_ids = work.loc[mask, USER_COL].unique()
+            
+            if len(found_ids) == 0:
+                st.warning("🔍 Пользователь не найден по заданным критериям.")
+            elif len(found_ids) == 1:
+                user_id_value = found_ids[0]
+                st.success(f"✅ Найден пользователь: {user_id_value}")
             else:
-                manual_id_cast = manual_user
-            user_id_value = manual_id_cast
-        else:
-            user_id_value = selected_user
+                st.warning(f"⚠️ Найдено пользователей: {len(found_ids)}. Уточните поиск (например, используйте точный ID).")
+                # Preview
+                preview_cols = [USER_COL] + extra_cols
+                preview = work[work[USER_COL].isin(found_ids)][preview_cols].drop_duplicates(subset=[USER_COL]).head(10)
+                st.dataframe(preview, hide_index=True)
+                
+        elif selected_label:
+            # Fallback to dropdown selection if no search input
+            user_id_value = label_to_id.get(selected_label)
 
         if user_id_value is not None:
             user_df = work[work[USER_COL] == user_id_value].copy()
@@ -260,21 +392,40 @@ def render_basic_analytics(df, work, metrics_df, USER_COL, USER_LABEL, local_tz,
                 st.warning("Нет событий для этого пользователя (с учётом фильтров).")
             else:
                 user_df = user_df.sort_values(by="win_date")
-                base_user = alt.Chart(user_df).encode(
-                    x=alt.X("win_date:T", title="Дата (win_date)"),
+                user_df["event_seq"] = range(1, len(user_df) + 1)
+
+                base = alt.Chart(user_df).encode(
+                    x=alt.X("win_date:T", title="Дата (win_date)")
+                )
+
+                # Line: Cumulative sequence
+                line = base.mark_line(color="#a0cbe8").encode(
+                    y=alt.Y("event_seq:Q", title="Событие №")
+                )
+
+                # Tooltip columns
+                tooltip_cols = [
+                    alt.Tooltip("win_date:T", title="Дата"),
+                    alt.Tooltip("win_type:N", title="Тип"),
+                    alt.Tooltip("is_real_prize:N", title="Real prize"),
+                    alt.Tooltip("is_point_win:N", title="Points"),
+                    alt.Tooltip("is_win_received:N", title="Получен"),
+                    alt.Tooltip("prize_id:N", title="prize_id")
+                ]
+                
+                if "prize_name" in user_df.columns:
+                    tooltip_cols.append(alt.Tooltip("prize_name:N", title="Приз"))
+
+                # Points: Individual events with details
+                points = base.mark_point(size=120, filled=True).encode(
+                    y=alt.Y("event_seq:Q"),
                     color=alt.Color("win_type:N", title="Тип"),
                     shape=alt.Shape("win_type:N", title="Тип"),
-                    tooltip=[
-                        alt.Tooltip("win_date:T", title="Дата"),
-                        alt.Tooltip("win_type:N", title="Тип"),
-                        alt.Tooltip("is_real_prize:N", title="Real prize"),
-                        alt.Tooltip("is_point_win:N", title="Points"),
-                        alt.Tooltip("is_win_received:N", title="Получен"),
-                        alt.Tooltip("prize_id:N", title="prize_id")
-                    ]
+                    tooltip=tooltip_cols
                 )
-                timeline = base_user.mark_point(size=140, filled=True).properties(
-                    height=160, width="container", title=f"События пользователя {user_id_value}"
+
+                timeline = (line + points).properties(
+                    height=300, width="container", title=f"История событий пользователя {user_id_value}"
                 )
                 st.altair_chart(timeline, use_container_width=True)
 
@@ -282,8 +433,11 @@ def render_basic_analytics(df, work, metrics_df, USER_COL, USER_LABEL, local_tz,
                     base_cols = [
                         USER_COL, "region_name", "win_type", "is_win_received",
                         "is_real_prize", "is_point_win", "win_date",
-                        "prize_receive_date", "prize_delivery_date", "prize_id"
+                        "prize_receive_date", "prize_delivery_date", "prize_id", "prize_name"
                     ]
+                    # Add extra cols to view
+                    base_cols.extend(extra_cols)
+                    
                     seen = set()
                     show_cols = [c for c in base_cols if c in user_df.columns and not (c in seen or seen.add(c))]
                     st.dataframe(user_df[show_cols])
