@@ -3,7 +3,7 @@ import pandas as pd
 import altair as alt
 from utils.helpers import aggregate_time, safe_rate
 
-def render_basic_analytics(df, work, metrics_df, USER_COL, USER_LABEL, local_tz, gran, mode_unique, metrics_scope, start_dt_local):
+def render_basic_analytics(df, work, metrics_df, USER_COL, USER_LABEL, local_tz, mode_unique, metrics_scope, start_dt_local):
     # ----------------------------- Metrics Summary (всё по win_date) --------------
     st.subheader("Ключевые метрики")
 
@@ -32,6 +32,8 @@ def render_basic_analytics(df, work, metrics_df, USER_COL, USER_LABEL, local_tz,
 
     # ----------------------------- Time Series (по win_date) ----------------------
     st.subheader("Динамика")
+
+    gran = st.radio("Гранулярность", ["Day", "Week", "Month"], horizontal=True, key="dynamic_gran")
 
     ts_events = aggregate_time(work, "win_date", gran, mode_unique, local_tz, USER_COL)
     metric_label = "Уникальные пользователи (win_date)" if mode_unique else "События (win_date)"

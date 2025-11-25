@@ -165,7 +165,7 @@ else:
 
 # Aggregation Settings (for Basic Analytics)
 mode_unique = st.sidebar.toggle("Считать уникальных пользователей (вместо событий)", value=False)
-gran = st.sidebar.radio("Гранулярность", ["Day","Week","Month"], horizontal=True)
+
 
 # Metrics Scope
 metrics_scope = st.sidebar.radio("Область метрик", ["Текущий срез", "Вся база (с учетом фильтров)"], index=0)
@@ -193,7 +193,7 @@ with tab_basic:
         USER_COL=USER_COL,
         USER_LABEL=USER_LABEL,
         local_tz=local_tz,
-        gran=gran,
+
         mode_unique=mode_unique,
         metrics_scope=metrics_scope,
         start_dt_local=start_dt_local
