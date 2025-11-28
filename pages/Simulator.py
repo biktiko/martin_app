@@ -25,6 +25,33 @@ def next_stage_name(cur: str) -> str | None:
     order = ["small", "medium", "adult"]
     i = order.index(cur)
     return order[i+1] if i+1 < len(order) else None
+import math
+import pandas as pd
+import streamlit as st
+import altair as alt
+from dataclasses import dataclass, asdict
+
+st.set_page_config(page_title="Goose Balance Simulator", layout="wide")
+
+# ------------------------------- Model ----------------------------------------
+@dataclass
+class StageSpec:
+    name: str
+    hunger_cap: int
+    size_cap: int
+    daily_hunger_loss: int
+    stageup_bonus_pts: int = 0  # optional: add to wallet on stage-up
+
+DEFAULT_STAGES = {
+    "small":  StageSpec("small",  hunger_cap=5,  size_cap=5,  daily_hunger_loss=1, stageup_bonus_pts=5),
+    "medium": StageSpec("medium", hunger_cap=10, size_cap=15, daily_hunger_loss=1, stageup_bonus_pts=10),
+    "adult":  StageSpec("adult",  hunger_cap=20, size_cap=15, daily_hunger_loss=2, stageup_bonus_pts=0),
+}
+
+def next_stage_name(cur: str) -> str | None:
+    order = ["small", "medium", "adult"]
+    i = order.index(cur)
+    return order[i+1] if i+1 < len(order) else None
 
 # Cost rule: 1st feed free, then 1,2,3,...
 def feed_cost_for(feed_index_1_based: int) -> int:
@@ -42,12 +69,13 @@ def simulate_goose(
     visit_daily: bool = True,
     max_paid_feeds_per_day: int = 10,
     add_stageup_bonus_to_wallet: bool = True,
-    max_days: int = 365
+    max_days: int = 365,
+    initial_wallet: float = 0.0
 ) -> tuple[pd.DataFrame, dict]:
     cur_stage = start_stage
     hunger = start_hunger
     size = start_size
-    wallet = 0.0
+    wallet = initial_wallet
 
     log = []
     day_reached_medium = None
@@ -212,6 +240,12 @@ with st.sidebar:
     bonus_s_to_m = colB1.number_input("Бонус small→medium", 0, 100, value=5)
     bonus_m_to_a = colB2.number_input("Бонус medium→adult", 0, 100, value=10)
 
+    st.markdown("---")
+    st.markdown("**Стартовые бонусы (Onboarding)**")
+    colO1, colO2 = st.columns(2)
+    bonus_egg = colO1.number_input("Разбитие яйца (Egg→Small)", 0, 100, value=3)
+    bonus_pair = colO2.number_input("Найти пару (1-й раз)", 0, 100, value=5)
+
     st.header("Стартовые значения")
     start_hunger = st.number_input("Начальный hunger", 0, 100, value=3)
     start_size   = st.number_input("Начальный size", 0, 300, value=1)
@@ -247,7 +281,8 @@ df, summary = simulate_goose(
     visit_daily=visit_daily,
     max_paid_feeds_per_day=max_paid_feeds_per_day,
     add_stageup_bonus_to_wallet=stage_bonus,
-    max_days=max_days
+    max_days=max_days,
+    initial_wallet=float(bonus_egg + bonus_pair)
 )
 
 # ----------------------------- Output -----------------------------------------
@@ -303,7 +338,8 @@ with tab3:
             visit_daily=visit_daily,
             max_paid_feeds_per_day=max_paid_feeds_per_day,
             add_stageup_bonus_to_wallet=stage_bonus,
-            max_days=max_days
+            max_days=max_days,
+            initial_wallet=float(bonus_egg + bonus_pair)
         )
         rows.append({
             "pts_per_week": r,
