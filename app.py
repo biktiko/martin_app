@@ -207,10 +207,10 @@ with tab_basic:
         USER_COL=USER_COL,
         USER_LABEL=USER_LABEL,
         local_tz=local_tz,
-
         mode_unique=mode_unique,
         metrics_scope=metrics_scope,
-        start_dt_local=start_dt_local
+        start_dt_local=start_dt_local,
+        filtered_df=filtered_df
     )
 
 with tab_advanced:

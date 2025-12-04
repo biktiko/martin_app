@@ -1,9 +1,9 @@
-import streamlit as st
+﻿import streamlit as st
 import pandas as pd
 import altair as alt
 from utils.helpers import aggregate_time, safe_rate
 
-def render_basic_analytics(df, work, metrics_df, USER_COL, USER_LABEL, local_tz, mode_unique, metrics_scope, start_dt_local):
+def render_basic_analytics(df, work, metrics_df, USER_COL, USER_LABEL, local_tz, mode_unique, metrics_scope, start_dt_local, filtered_df):
     # ----------------------------- Metrics Summary (всё по win_date) --------------
     st.subheader("Ключевые метрики")
 
@@ -55,6 +55,42 @@ def render_basic_analytics(df, work, metrics_df, USER_COL, USER_LABEL, local_tz,
                  alt.Tooltip("count:Q", title=real_label)]
     ).properties(height=280, title="Реальные призы по времени (win_date)")
     st.altair_chart(chart_real, use_container_width=True)
+
+    # NEW: Growth of New Unique Users
+    if USER_COL and not filtered_df.empty:
+        # Calculate first appearance for each user in the filtered scope
+        first_scans = filtered_df.groupby(USER_COL)["win_date"].min().reset_index()
+        first_scans.columns = [USER_COL, "first_seen_date"]
+        
+        # Filter to current view range (work)
+        if not work.empty:
+            min_dt = work["win_date"].min()
+            max_dt = work["win_date"].max()
+            
+            # Ensure timezone awareness/conversion for comparison
+            if first_scans["first_seen_date"].dt.tz is None:
+                 first_scans["first_seen_date"] = first_scans["first_seen_date"].dt.tz_localize("UTC")
+            
+            if local_tz != "UTC":
+                first_scans["first_seen_date"] = first_scans["first_seen_date"].dt.tz_convert(local_tz)
+            
+            first_scans_in_range = first_scans[
+                (first_scans["first_seen_date"] >= min_dt) & 
+                (first_scans["first_seen_date"] <= max_dt)
+            ]
+        else:
+            first_scans_in_range = first_scans
+
+        ts_new_users = aggregate_time(first_scans_in_range, "first_seen_date", gran, False, local_tz, USER_COL)
+        
+        chart_new_users = alt.Chart(ts_new_users).mark_bar(color="#2ca02c").encode(
+            x=alt.X("date:T", title="Дата", axis=alt.Axis(format="%d.%m", labelAngle=-35)),
+            y=alt.Y("count:Q", title="Новые пользователи"),
+            tooltip=[alt.Tooltip("date:T", title="Дата"),
+                     alt.Tooltip("count:Q", title="Новые пользователи")]
+        ).properties(height=280, title="Прирост новых пользователей (по дате первого сканирования)")
+        
+        st.altair_chart(chart_new_users, use_container_width=True)
 
     with st.expander("DEBUG Time Series"):
         st.write("Events head:", ts_events.head(10))
@@ -211,6 +247,159 @@ def render_basic_analytics(df, work, metrics_df, USER_COL, USER_LABEL, local_tz,
         )
     else:
         st.info("Нет real prizes в текущей области метрик.")
+
+    # ----------------------------- Winner vs Others Comparison --------------------
+    st.subheader("Сравнение: Победители (Real Prize) vs Остальные")
+
+    if USER_COL:
+        # 1. Identify Winners (Global Scope)
+        # Winners are users who have EVER won a real prize in the filtered context
+        all_winners_ids = set(filtered_df[filtered_df["is_real_prize"]][USER_COL].unique())
+        
+        # Received Winners: Users who have EVER won AND received at least one real prize
+        received_winners_ids = set(filtered_df[
+            filtered_df["is_real_prize"] & filtered_df["is_win_received"]
+        ][USER_COL].unique())
+        
+        # Pending Winners: Users who have won but NEVER received any real prize
+        # (Strict definition: if they received at least one, they are in "Received Winners")
+        pending_winners_ids = all_winners_ids - received_winners_ids
+        
+        # 2. UI Controls
+        view_mode = st.radio(
+            "Режим отображения", 
+            [
+                "Все пользователи", 
+                "Только победители (Все)", 
+                "Только получившие (Received)", 
+                "Только ожидающие (Pending Only)", 
+                "Только без выигрышей (Others)",
+                "Сравнение (3 группы)"
+            ], 
+            horizontal=True,
+            key="winner_comparison_mode"
+        )
+        
+        # 3. Prepare Data
+        # We work with 'metrics_df' (current scope) but tag users based on global lists
+        # Create a copy to avoid SettingWithCopyWarning and side effects
+        metrics_df = metrics_df.copy()
+        
+        # Assign segments
+        def _get_winner_segment(uid):
+            if uid in received_winners_ids:
+                return "Received"
+            elif uid in pending_winners_ids:
+                return "Pending"
+            else:
+                return "Others"
+                
+        metrics_df["winner_segment"] = metrics_df[USER_COL].apply(_get_winner_segment)
+        
+        if view_mode == "Все пользователи":
+            st.caption("Показана статистика по всем пользователям в текущем срезе.")
+            target_df = metrics_df
+            
+        elif view_mode == "Только победители (Все)":
+            target_df = metrics_df[metrics_df["winner_segment"].isin(["Received", "Pending"])]
+            if target_df.empty:
+                st.warning("В текущем срезе нет событий от победителей.")
+            else:
+                st.metric("Количество победителей (всех) в текущем срезе", target_df[USER_COL].nunique())
+                _render_simple_activity_chart(target_df, gran, local_tz, USER_COL, "Активность победителей (всех)", "green")
+
+        elif view_mode == "Только получившие (Received)":
+            target_df = metrics_df[metrics_df["winner_segment"] == "Received"]
+            if target_df.empty:
+                st.warning("В текущем срезе нет событий от получивших приз.")
+            else:
+                st.metric("Количество получивших в текущем срезе", target_df[USER_COL].nunique())
+                _render_simple_activity_chart(target_df, gran, local_tz, USER_COL, "Активность получивших", "green")
+
+        elif view_mode == "Только ожидающие (Pending Only)":
+            target_df = metrics_df[metrics_df["winner_segment"] == "Pending"]
+            if target_df.empty:
+                st.warning("В текущем срезе нет событий от ожидающих (pending only).")
+            else:
+                st.metric("Количество ожидающих (pending only) в текущем срезе", target_df[USER_COL].nunique())
+                _render_simple_activity_chart(target_df, gran, local_tz, USER_COL, "Активность ожидающих", "orange")
+
+        elif view_mode == "Только без выигрышей (Others)":
+            target_df = metrics_df[metrics_df["winner_segment"] == "Others"]
+            if target_df.empty:
+                st.warning("В текущем срезе нет событий от пользователей без выигрышей.")
+            else:
+                st.metric("Количество без выигрышей (Others) в текущем срезе", target_df[USER_COL].nunique())
+                _render_simple_activity_chart(target_df, gran, local_tz, USER_COL, "Активность без выигрышей", "gray")
+
+        else: # Comparison (3 groups)
+            # A. Key Metrics Comparison
+            c_cmp1, c_cmp2, c_cmp3 = st.columns(3)
+            
+            # Helper to get avg scans
+            def _get_avg_scans(seg):
+                sub = metrics_df[metrics_df["winner_segment"] == seg]
+                if sub.empty: return 0.0
+                return sub.groupby(USER_COL).size().mean()
+
+            avg_rec = _get_avg_scans("Received")
+            avg_pen = _get_avg_scans("Pending")
+            avg_oth = _get_avg_scans("Others")
+            
+            c_cmp1.metric("Avg Scans (Received)", f"{avg_rec:.2f}")
+            c_cmp2.metric("Avg Scans (Pending)", f"{avg_pen:.2f}")
+            c_cmp3.metric("Avg Scans (Others)", f"{avg_oth:.2f}")
+            
+            # B. Activity Comparison Chart
+            # Aggregate for each group
+            ts_list = []
+            for seg in ["Received", "Pending", "Others"]:
+                sub = metrics_df[metrics_df["winner_segment"] == seg]
+                ts = aggregate_time(sub, "win_date", gran, True, local_tz, USER_COL)
+                ts["Group"] = seg
+                ts_list.append(ts)
+            
+            ts_cmp = pd.concat(ts_list)
+            
+            chart_cmp = alt.Chart(ts_cmp).mark_line(point=True).encode(
+                x=alt.X("date:T", title="Дата"),
+                y=alt.Y("count:Q", title="Уникальные пользователи"),
+                color=alt.Color("Group:N", scale=alt.Scale(
+                    domain=["Received", "Pending", "Others"], 
+                    range=["green", "orange", "gray"]
+                )),
+                tooltip=["date", "count", "Group"]
+            ).properties(height=300, title="Сравнение активности: Received vs Pending vs Others")
+            st.altair_chart(chart_cmp, use_container_width=True)
+            
+            # C. Scans Distribution (Histogram)
+            st.markdown("##### Распределение количества сканов")
+            
+            counts_list = []
+            for seg in ["Received", "Pending", "Others"]:
+                sub = metrics_df[metrics_df["winner_segment"] == seg]
+                if not sub.empty:
+                    c = sub.groupby(USER_COL).size().reset_index(name="scans")
+                    c["Group"] = seg
+                    counts_list.append(c)
+            
+            if counts_list:
+                counts_all = pd.concat(counts_list)
+                counts_all["scans_capped"] = counts_all["scans"].clip(upper=50)
+                
+                hist_chart = alt.Chart(counts_all).mark_bar(opacity=0.6, binSpacing=0).encode(
+                    x=alt.X("scans_capped:Q", bin=alt.Bin(maxbins=25), title="Количество сканов (capped at 50)"),
+                    y=alt.Y("count()", stack=None, title="Количество пользователей"),
+                    color=alt.Color("Group:N", scale=alt.Scale(
+                        domain=["Received", "Pending", "Others"], 
+                        range=["green", "orange", "gray"]
+                    )),
+                    tooltip=["count()", "Group"]
+                ).properties(height=250, title="Гистограмма активности")
+                st.altair_chart(hist_chart, use_container_width=True)
+
+    else:
+        st.info("Для сравнения групп необходимо выбрать поле идентификатора пользователя.")
 
     # ----------------------------- User activity (на win_date) --------------------
     st.subheader("Активность пользователей")
@@ -463,3 +652,15 @@ def render_basic_analytics(df, work, metrics_df, USER_COL, USER_LABEL, local_tz,
             file_name="timeseries_real_prizes_win_date.csv",
             mime="text/csv"
         )
+
+
+
+def _render_simple_activity_chart(df, gran, local_tz, USER_COL, title, color):
+    ts = aggregate_time(df, 'win_date', gran, True, local_tz, USER_COL)
+    chart = alt.Chart(ts).mark_line(point=True, color=color).encode(
+        x=alt.X('date:T', title='Дата'),
+        y=alt.Y('count:Q', title='Активные пользователи'),
+        tooltip=['date', 'count']
+    ).properties(height=250, title=title)
+    st.altair_chart(chart, use_container_width=True)
+
