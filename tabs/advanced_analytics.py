@@ -63,6 +63,50 @@ def render_advanced_analytics(df, work, metrics_df, USER_COL, local_tz):
             y=alt.Y("count()", title="Количество призов")
         ).properties(title="Распределение времени получения приза")
         st.altair_chart(chart_claim, use_container_width=True)
+
+        # --- New: Weekly Dynamics ---
+        st.markdown("#### Динамика времени получения (по неделям получения)")
+        st.caption("График показывает среднее/медианное время ожидания для призов, *полученных* в указанную неделю.")
+        
+        # Calculate weekly stats based on RECEIVE date to avoid censoring bias of recent wins
+        # (If we grouped by win_date, recent weeks would only show 'fast' claims, biasing the average down)
+        claim_data["week_start"] = claim_data["prize_receive_date"].dt.to_period("W").dt.start_time
+        
+        weekly_stats = claim_data.groupby("week_start")["hours_to_claim"].agg(
+            mean_hours="mean",
+            median_hours="median",
+            count="count"
+        ).reset_index()
+        
+        if not weekly_stats.empty:
+            weekly_melted = weekly_stats.melt(
+                id_vars=["week_start", "count"], 
+                value_vars=["mean_hours", "median_hours"],
+                var_name="metric", 
+                value_name="hours"
+            )
+            
+            weekly_melted["metric_label"] = weekly_melted["metric"].map({
+                "mean_hours": "Среднее",
+                "median_hours": "Медиана"
+            })
+            
+            chart_dynamics = alt.Chart(weekly_melted).mark_line(point=True).encode(
+                x=alt.X("week_start:T", title="Неделя получения"),
+                y=alt.Y("hours:Q", title="Часов ожидания"),
+                color=alt.Color("metric_label:N", title="Метрика"),
+                tooltip=[
+                    alt.Tooltip("week_start", title="Неделя", format="%Y-%m-%d"),
+                    alt.Tooltip("metric_label", title="Тип"),
+                    alt.Tooltip("hours", title="Часов", format=".1f"),
+                    alt.Tooltip("count", title="Кол-во выдач")
+                ]
+            ).properties(
+                title="Динамика времени получения (по дате выдачи)",
+                height=300
+            ).interactive()
+            
+            st.altair_chart(chart_dynamics, use_container_width=True)
         
         now = pd.Timestamp.now(tz="UTC")
         pending_long = df[
