@@ -120,6 +120,55 @@ if received_filter == "Только получен":
 elif received_filter == "Не получен":
     filtered_df = filtered_df[~filtered_df["is_win_received"]]
 
+# F. Created Date Filter
+if "created_date" in filtered_df.columns:
+    cd_series = filtered_df["created_date"].dropna()
+    if not cd_series.empty:
+        cd_min = cd_series.min()
+        cd_max = cd_series.max()
+
+        if local_tz != "UTC":
+            cd_min = cd_min.tz_convert(local_tz)
+            cd_max = cd_max.tz_convert(local_tz)
+            
+        # Ensure min < max
+        if cd_min > cd_max:
+             cd_min = cd_max
+
+        st.sidebar.markdown("---")
+        created_range = st.sidebar.slider(
+            "Дата создания QR (created_date)",
+            min_value=cd_min.to_pydatetime(),
+            max_value=cd_max.to_pydatetime(),
+            value=(cd_min.to_pydatetime(), cd_max.to_pydatetime()),
+            format="DD.MM.YYYY HH:mm"
+        )
+        
+        # Apply filter
+        # 1. Convert tuple back to Timestamp with TZ
+        c_start = pd.Timestamp(created_range[0])
+        c_end = pd.Timestamp(created_range[1])
+        
+        # 2. Localize if needed to match what the slider provided (which is local_tz)
+        if c_start.tzinfo is None:
+            c_start = c_start.tz_localize(local_tz)
+        elif str(c_start.tzinfo) != str(local_tz): # crude check, or just tz_convert
+            c_start = c_start.tz_convert(local_tz)
+            
+        if c_end.tzinfo is None:
+            c_end = c_end.tz_localize(local_tz)
+        elif str(c_end.tzinfo) != str(local_tz):
+            c_end = c_end.tz_convert(local_tz)
+
+        # 3. Convert to UTC to filter the dataframe
+        c_start_utc = c_start.tz_convert("UTC")
+        c_end_utc = c_end.tz_convert("UTC")
+        
+        filtered_df = filtered_df[
+            (filtered_df["created_date"] >= c_start_utc) & 
+            (filtered_df["created_date"] <= c_end_utc)
+        ]
+
 # --- 3. Date Filtering (Create work) ---
 # Hardcoded start date
 START_FROM_STR = "2025-09-15"
