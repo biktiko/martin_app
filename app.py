@@ -65,6 +65,54 @@ USER_LABEL = USER_COL
 
 local_tz = st.sidebar.selectbox("Часовой пояс отображения", ["UTC","Asia/Yerevan"], index=1)
 
+# --- Quick Filters Button ---
+if st.sidebar.button("🏆 Новый розыгрыш (Чипсы)"):
+    # 1. Region
+    # We set strict "Armenia" filter
+    if "region_name" in df.columns:
+        st.session_state["region_filter"] = ["Armenia"]
+    
+    # 2. Created Date (from 2025-12-11)
+    if "created_date" in df.columns:
+        q_start = pd.Timestamp("2025-12-11")
+        if local_tz != "UTC":
+            q_start = q_start.tz_localize(local_tz)
+        else:
+            q_start = q_start.tz_localize("UTC")
+            
+        # Find appropriate max from data (considering region if possible, or global)
+        # Using global max to be safe/simple, or filtered max?
+        # Let's use filtered max to ensure valid range
+        temp_df = df[df["region_name"] == "Armenia"] if "region_name" in df.columns else df
+        q_max = temp_df["created_date"].max() if not temp_df.empty else pd.Timestamp.now(tz="UTC")
+        if local_tz != "UTC":
+            q_max = q_max.tz_convert(local_tz)
+            
+        if q_max < q_start:
+            q_max = q_start # Handle edge case where no data yet
+            
+        st.session_state["created_date_filter"] = (q_start.to_pydatetime(), q_max.to_pydatetime())
+
+    # 3. Win Date (from 2026-01-15)
+    if "win_date" in df.columns:
+        w_start = pd.Timestamp("2026-01-15")
+        if local_tz != "UTC":
+            w_start = w_start.tz_localize(local_tz)
+        else:
+            w_start = w_start.tz_localize("UTC")
+            
+        temp_df = df[df["region_name"] == "Armenia"] if "region_name" in df.columns else df
+        w_max = temp_df["win_date"].max() if not temp_df.empty else pd.Timestamp.now(tz="UTC")
+        if local_tz != "UTC":
+            w_max = w_max.tz_convert(local_tz)
+            
+        if w_max < w_start:
+            w_max = w_start
+            
+        st.session_state["win_date_filter"] = (w_start.to_pydatetime(), w_max.to_pydatetime())
+        
+    st.rerun()
+
 # --- 1. Global Segmentation (Pre-Filter) ---
 if USER_COL:
     # Calculate global frequency for segmentation based on FULL data
@@ -86,7 +134,10 @@ filtered_df = df.copy()
 # A. Region Filter
 if "region_name" in filtered_df.columns:
     region_values = sorted([x for x in filtered_df["region_name"].unique() if pd.notna(x)])
-    selected_regions = st.sidebar.multiselect("Регионы", region_values, default=region_values)
+    # Ensure session state is initialized to avoid "default value" warning if key exists
+    if "region_filter" not in st.session_state:
+        st.session_state["region_filter"] = region_values
+    selected_regions = st.sidebar.multiselect("Регионы", region_values, key="region_filter")
     if selected_regions:
         filtered_df = filtered_df[filtered_df["region_name"].isin(selected_regions)]
 
@@ -136,12 +187,26 @@ if "created_date" in filtered_df.columns:
              cd_min = cd_max
 
         st.sidebar.markdown("---")
+        # Clamp session state if it exists to avoid StreamlitValueAboveMaxError
+        if "created_date_filter" in st.session_state:
+            curr_vals = st.session_state["created_date_filter"]
+            c_min_dt = cd_min.to_pydatetime()
+            c_max_dt = cd_max.to_pydatetime()
+            # Ensure tuple, handle potential None or mismatch
+            try:
+                v0 = max(c_min_dt, min(curr_vals[0], c_max_dt))
+                v1 = max(c_min_dt, min(curr_vals[1], c_max_dt))
+                st.session_state["created_date_filter"] = (v0, v1)
+            except Exception:
+                pass # Fallback to default behavior if types mismatch
+
         created_range = st.sidebar.slider(
             "Дата создания QR (created_date)",
             min_value=cd_min.to_pydatetime(),
             max_value=cd_max.to_pydatetime(),
             value=(cd_min.to_pydatetime(), cd_max.to_pydatetime()),
-            format="DD.MM.YYYY HH:mm"
+            format="DD.MM.YYYY HH:mm",
+            key="created_date_filter"
         )
         
         # Apply filter
@@ -203,12 +268,32 @@ if not work.empty:
     if slider_min > slider_max:
         slider_min = slider_max
 
+    # Clamp session state for win_date to avoid StreamlitValueAboveMaxError
+    if "win_date_filter" in st.session_state:
+        w_vals = st.session_state["win_date_filter"]
+        w_min_dt = slider_min.to_pydatetime()
+        w_max_dt = slider_max.to_pydatetime()
+        try:
+            # We must respect the types. slider_min/max are usually Timestamps converted to pydatetime above
+            # session state has datetimes.
+            wv0 = pd.Timestamp(w_vals[0]).to_pydatetime()
+            wv1 = pd.Timestamp(w_vals[1]).to_pydatetime()
+            
+            # Clamp
+            wv0 = max(w_min_dt, min(wv0, w_max_dt))
+            wv1 = max(w_min_dt, min(wv1, w_max_dt))
+            
+            st.session_state["win_date_filter"] = (wv0, wv1)
+        except Exception:
+            pass
+
     win_range = st.sidebar.slider(
         "Диапазон по win_date (≥ 15.09.2025)",
         min_value=slider_min.to_pydatetime(),
         max_value=slider_max.to_pydatetime(),
         value=(slider_min.to_pydatetime(), slider_max.to_pydatetime()),
-        format="DD.MM.YYYY"
+        format="DD.MM.YYYY",
+        key="win_date_filter"
     )
 
     # Apply slider filter
