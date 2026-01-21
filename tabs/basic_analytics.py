@@ -58,8 +58,15 @@ def render_basic_analytics(df, work, metrics_df, USER_COL, USER_LABEL, local_tz,
 
     # NEW: Growth of New Unique Users
     if USER_COL and not filtered_df.empty:
-        # Calculate first appearance for each user in the filtered scope
-        first_scans = filtered_df.groupby(USER_COL)["win_date"].min().reset_index()
+        # 1. Identify users currently in the filtered scope
+        current_scope_users = filtered_df[USER_COL].unique()
+
+        # 2. Calculate TRUE first appearance context globally (using df) for these users
+        #    This prevents "old" users from appearing as "new" just because their old history was filtered out.
+        #    We only consider users who are present in the current filter (e.g. Region=Armenia),
+        #    but we look at their entire history to find the real start date.
+        global_history = df[df[USER_COL].isin(current_scope_users)]
+        first_scans = global_history.groupby(USER_COL)["win_date"].min().reset_index()
         first_scans.columns = [USER_COL, "first_seen_date"]
         
         # Filter to current view range (work)
