@@ -1,0 +1,18 @@
+SELECT 
+	q.id,
+	q.product_campaign_id,
+	q.prize_id,
+	q.customer_id,
+	q.win_date,
+	q.is_win_received,
+	q.created_date,
+	c.phone_number,
+	q.has_customer_confirmed,
+	q.prize_delivery_date,
+	q.prize_receive_date,
+	q.region_id,
+	c.first_name,
+	c.last_name
+FROM public.qr_code q 
+JOIN public.customer c ON q.customer_id = c.id
+WHERE q.win_date is not null and q.region_id=2
