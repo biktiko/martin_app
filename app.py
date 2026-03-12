@@ -66,7 +66,7 @@ USER_LABEL = USER_COL
 local_tz = st.sidebar.selectbox("Часовой пояс отображения", ["UTC","Asia/Yerevan"], index=1)
 
 # --- Quick Filters Buttons ---
-q_cols = st.sidebar.columns(2)
+q_cols = st.sidebar.columns(3)
 
 # A. Chips Button
 if q_cols[0].button("🏆 Чипсы", help="Розыгрыш чипсов с 11.12.2025 (created) / 15.01.2026 (win)"):
@@ -122,6 +122,36 @@ if q_cols[1].button("🌻 Семечки", help="Розыгрыш семечек
             w_max = w_start
         if w_max < w_start: w_max = w_start
         st.session_state["win_date_filter"] = (w_start.to_pydatetime(), w_max.to_pydatetime())
+    st.rerun()
+
+# C. Seeds Phase 1 Button
+if q_cols[2].button("🌱 1 этап", help="1 этап семечек: до 09.12.2025 (created) / до 10.12.2025 (win)"):
+    if "region_name" in df.columns:
+        st.session_state["region_filter"] = ["Armenia"]
+    
+    if "created_date" in df.columns:
+        q_end = pd.Timestamp("2025-12-09 23:59:59").tz_localize(local_tz) if local_tz != "UTC" else pd.Timestamp("2025-12-09 23:59:59").tz_localize("UTC")
+        temp_df = df[df["region_name"] == "Armenia"] if "region_name" in df.columns else df
+        q_min = temp_df["created_date"].min()
+        if pd.notna(q_min):
+            q_min = q_min.tz_convert(local_tz) if local_tz != "UTC" else q_min.tz_convert("UTC")
+        else:
+            q_min = q_end - pd.Timedelta(days=30) # fallback
+        if q_min > q_end: q_min = q_end - pd.Timedelta(hours=1)
+        st.session_state["created_date_filter"] = (q_min.to_pydatetime(), q_end.to_pydatetime())
+
+    if "win_date" in df.columns:
+        w_start = pd.Timestamp("2025-09-15 00:00:00").tz_localize(local_tz) if local_tz != "UTC" else pd.Timestamp("2025-09-15 00:00:00").tz_localize("UTC")
+        w_end = pd.Timestamp("2025-12-10 23:59:59").tz_localize(local_tz) if local_tz != "UTC" else pd.Timestamp("2025-12-10 23:59:59").tz_localize("UTC")
+        temp_df = df[df["region_name"] == "Armenia"] if "region_name" in df.columns else df
+        w_min = temp_df["win_date"].min()
+        if pd.notna(w_min):
+            w_min = w_min.tz_convert(local_tz) if local_tz != "UTC" else w_min.tz_convert("UTC")
+            if w_min < w_start: w_min = w_start
+        else:
+            w_min = w_start
+        if w_min > w_end: w_min = w_end - pd.Timedelta(hours=1)
+        st.session_state["win_date_filter"] = (w_min.to_pydatetime(), w_end.to_pydatetime())
     st.rerun()
 
 # --- 1. Global Segmentation (Pre-Filter) ---
