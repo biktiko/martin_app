@@ -1,5 +1,6 @@
-﻿import streamlit as st
+import streamlit as st
 import pandas as pd
+import datetime as dt
 import altair as alt
 from utils.helpers import aggregate_time, safe_rate
 
@@ -29,6 +30,57 @@ def render_basic_analytics(df, work, metrics_df, USER_COL, USER_LABEL, local_tz,
     c2b.metric("Доля real prizes среди выигрышей", f"{safe_rate(real_prizes_total, wins_total):.2%}")
     c2c.metric("Выдано real prizes", f"{safe_rate(real_prizes_received, real_prizes_total):.2%}")
     c2d.metric("Ожидают выдачи", f"{safe_rate(real_prizes_pending, real_prizes_total):.2%}")
+
+    # --- Daily Averages ---
+    avg_scans_per_day = 0
+    avg_unique_users_per_day = 0
+    avg_new_users_per_day = 0
+    avg_wins_per_day = 0
+    avg_real_prizes_per_day = 0
+
+    if not metrics_df.empty and "win_date" in metrics_df.columns:
+        metrics_df_daily = metrics_df.copy()
+        if metrics_df_daily["win_date"].dt.tz is None:
+            metrics_df_daily["win_date"] = metrics_df_daily["win_date"].dt.tz_localize("UTC")
+        if local_tz != "UTC":
+            metrics_df_daily["win_date"] = metrics_df_daily["win_date"].dt.tz_convert(local_tz)
+            
+        metrics_df_daily["day"] = metrics_df_daily["win_date"].dt.date
+        min_day = metrics_df_daily["day"].min()
+        max_day = metrics_df_daily["day"].max()
+        
+        if pd.notna(min_day) and pd.notna(max_day):
+            num_days = (max_day - min_day).days + 1
+            if num_days > 0:
+                avg_scans_per_day = total_events / num_days
+                avg_wins_per_day = wins_total / num_days
+                avg_real_prizes_per_day = real_prizes_total / num_days
+                
+                if USER_COL:
+                    all_days = [min_day + dt.timedelta(days=i) for i in range(num_days)]
+                    daily_unique = metrics_df_daily.groupby("day")[USER_COL].nunique().reindex(all_days, fill_value=0)
+                    avg_unique_users_per_day = daily_unique.mean()
+                    
+                    current_scope_users = metrics_df[USER_COL].dropna().unique()
+                    global_history = df[df[USER_COL].isin(current_scope_users)]
+                    first_scans = global_history.groupby(USER_COL)["win_date"].min()
+                    
+                    if first_scans.dt.tz is None:
+                        first_scans = first_scans.dt.tz_localize("UTC")
+                    if local_tz != "UTC":
+                        first_scans = first_scans.dt.tz_convert(local_tz)
+                        
+                    first_scans_day = first_scans.dt.date
+                    first_scans_in_range = first_scans_day[(first_scans_day >= min_day) & (first_scans_day <= max_day)]
+                    avg_new_users_per_day = len(first_scans_in_range) / num_days
+
+    st.markdown("##### Средние показатели в день")
+    c3a, c3b, c3c, c3d, c3e = st.columns(5)
+    c3a.metric("Сканирований", f"{avg_scans_per_day:.1f}")
+    c3b.metric("Уник. пользователей", f"{avg_unique_users_per_day:.1f}")
+    c3c.metric("Новых пользователей", f"{avg_new_users_per_day:.1f}")
+    c3d.metric("Любых выигрышей", f"{avg_wins_per_day:.1f}")
+    c3e.metric("Real prizes", f"{avg_real_prizes_per_day:.1f}")
 
     # ----------------------------- Time Series (по win_date) ----------------------
     st.subheader("Динамика")
