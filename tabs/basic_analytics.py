@@ -483,6 +483,66 @@ def render_basic_analytics(df, work, metrics_df, USER_COL, USER_LABEL, local_tz,
         activity["avg_days_between_scans"] = (activity["avg_hours_between_scans"] / 24).round(2)
         activity["avg_hours_between_scans"] = activity["avg_hours_between_scans"].round(2)
         activity["median_hours_between_scans"] = activity["median_hours_between_scans"].round(2)
+        if len(tmp) > 0:
+            period_max = tmp["win_date"].max()
+            period_min = tmp["win_date"].min()
+            
+            # 1. Real global first scans for these users to determine true age
+            curr_users = tmp[USER_COL].unique()
+            global_first_scans = df[df[USER_COL].isin(curr_users)].groupby(USER_COL)["win_date"].min()
+            if global_first_scans.dt.tz is None:
+                 global_first_scans = global_first_scans.dt.tz_localize("UTC")
+            if local_tz != "UTC":
+                 global_first_scans = global_first_scans.dt.tz_convert(local_tz)
+                 
+            # 2. Effective start is the later of their true first scan or the period min
+            eff_starts = global_first_scans.clip(lower=period_min)
+            eff_days = (period_max - eff_starts).dt.total_seconds() / 86400.0
+            
+            # Clip at 0.01 to prevent division by zero for identical min/max
+            eff_days = eff_days.clip(lower=0.01)
+
+            # 3. Weekly rates (only for users with >= 7 days lifetime)
+            valid_7 = eff_days[eff_days >= 7].index
+            if len(valid_7) > 0:
+                weekly_rates = scans_per_user.reindex(valid_7) / (eff_days.reindex(valid_7) / 7.0)
+                avg_weekly_rate = weekly_rates.mean()
+                q_w = weekly_rates.quantile([0.25, 0.5, 0.75, 1.0])
+                valid_7_count = len(valid_7)
+            else:
+                avg_weekly_rate = 0.0
+                q_w = pd.Series({0.25: 0, 0.5: 0, 0.75: 0, 1.0: 0})
+                valid_7_count = 0
+
+            # 4. Monthly rates (only for users with >= 30 days lifetime)
+            valid_30 = eff_days[eff_days >= 30].index
+            if len(valid_30) > 0:
+                monthly_rates = scans_per_user.reindex(valid_30) / (eff_days.reindex(valid_30) / 30.0)
+                avg_monthly_rate = monthly_rates.mean()
+                q_m = monthly_rates.quantile([0.25, 0.5, 0.75, 1.0])
+                valid_30_count = len(valid_30)
+            else:
+                avg_monthly_rate = 0.0
+                q_m = pd.Series({0.25: 0, 0.5: 0, 0.75: 0, 1.0: 0})
+                valid_30_count = 0
+                
+            st.markdown("##### Индивидуальные средние показатели")
+            c4a, c4b = st.columns(2)
+            with c4a:
+                st.metric("Скан/нед (в среднем на юзера)", f"{avg_weekly_rate:.2f}", f"≥7 дней (база: {valid_7_count} чел)", delta_color="off")
+                if valid_7_count > 0:
+                    st.caption(f"**Квартили:** Q1: {q_w[0.25]:.1f} | Q2 (Медиана): {q_w[0.5]:.1f} | Q3: {q_w[0.75]:.1f} | Q4 (Max): {q_w[1.0]:.1f}")
+            with c4b:
+                st.metric("Скан/мес (в среднем на юзера)", f"{avg_monthly_rate:.2f}", f"≥30 дней (база: {valid_30_count} чел)", delta_color="off")
+                if valid_30_count > 0:
+                    st.caption(f"**Квартили:** Q1: {q_m[0.25]:.1f} | Q2 (Медиана): {q_m[0.5]:.1f} | Q3: {q_m[0.75]:.1f} | Q4 (Max): {q_m[1.0]:.1f}")
+            
+            # Enrich table
+            activity["lifetime_days_in_period"] = eff_days.reindex(activity.index).round(1)
+            activity["scans_per_week"] = (activity["scans"] / (eff_days.reindex(activity.index) / 7.0)).round(2)
+            activity["scans_per_month"] = (activity["scans"] / (eff_days.reindex(activity.index) / 30.0)).round(2)
+            activity.loc[activity["lifetime_days_in_period"] < 1, ["scans_per_week", "scans_per_month"]] = None
+
         activity = activity.reset_index().sort_values(["scans","wins_any","real_prizes"], ascending=False)
 
         st.dataframe(activity, use_container_width=True, height=420)
