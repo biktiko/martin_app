@@ -31,7 +31,10 @@ def aggregate_time(df_in: pd.DataFrame, date_field: str, granularity: str, uniqu
     Агрегация по win_date без смещения дней.
     """
     if df_in.empty:
-        return pd.DataFrame(columns=["date","count"])
+        return pd.DataFrame({
+            "date": pd.Series(dtype="datetime64[ns]"),
+            "count": pd.Series(dtype="int64")
+        })
     
     s = pd.to_datetime(df_in[date_field], errors="coerce", utc=True)
     if local_tz != "UTC":

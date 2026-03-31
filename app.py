@@ -8,6 +8,7 @@ from utils.auth import require_auth
 from utils.data import load_data, process_data, get_user_col
 from tabs.basic_analytics import render_basic_analytics
 from tabs.advanced_analytics import render_advanced_analytics
+from tabs.product_analytics import render_product_analytics
 
 # ----------------------------- Config & Auth ----------------------------------
 st.set_page_config(page_title="QR Code Analytics", layout="wide")
@@ -36,6 +37,10 @@ else:
 
 # Process data (add derived columns)
 df = process_data(raw_df.copy())
+
+# Enrich with product info (names, categories)
+from utils.data import enrich_with_product_info
+df = enrich_with_product_info(df)
 
 # Enrich with prize names
 from utils.prizes import enrich_with_prize_name
@@ -199,6 +204,14 @@ if USER_COL:
     selected_segments = st.sidebar.multiselect("Сегмент пользователей", all_segments, default=[])
     if selected_segments:
         filtered_df = filtered_df[filtered_df["user_segment"].isin(selected_segments)]
+
+# D. Category Filter (NEW)
+if "product_category" in filtered_df.columns:
+    cat_values = sorted([x for x in filtered_df["product_category"].unique() if pd.notna(x)])
+    if cat_values:
+        selected_cats = st.sidebar.multiselect("Категория продукта", cat_values, default=[])
+        if selected_cats:
+            filtered_df = filtered_df[filtered_df["product_category"].isin(selected_cats)]
 
 # D. Win Type Filter
 win_type_values = ["real_prize","points","no_win"]
@@ -372,7 +385,7 @@ else:
 st.title("QR Code Analytics")
 
 # Tabs
-tab_basic, tab_advanced = st.tabs(["Базовая аналитика", "Advanced Analytics"])
+tab_basic, tab_advanced, tab_products = st.tabs(["Базовая аналитика", "Advanced Analytics", "Анализ продуктов"])
 
 with tab_basic:
     render_basic_analytics(
@@ -393,6 +406,13 @@ with tab_advanced:
         df=filtered_df,
         work=work,
         metrics_df=metrics_df,
+        USER_COL=USER_COL,
+        local_tz=local_tz
+    )
+
+with tab_products:
+    render_product_analytics(
+        df=work,
         USER_COL=USER_COL,
         local_tz=local_tz
     )

@@ -755,7 +755,8 @@ def render_basic_analytics(df, work, metrics_df, USER_COL, USER_LABEL, local_tz,
     # ----------------------------- Export -----------------------------------------
     with st.expander("Экспорт агрегированных данных (Time Series)"):
         ts_export = ts_events.copy()
-        ts_export["date"] = ts_export["date"].dt.strftime("%Y-%m-%d %H:%M:%S")
+        if not ts_export.empty:
+            ts_export["date"] = pd.to_datetime(ts_export["date"]).dt.strftime("%Y-%m-%d %H:%M:%S")
         st.dataframe(ts_export)
         st.download_button(
             "Скачать Time Series (events, win_date) CSV",
@@ -764,7 +765,8 @@ def render_basic_analytics(df, work, metrics_df, USER_COL, USER_LABEL, local_tz,
             mime="text/csv"
         )
         ts_real_export = ts_real.copy()
-        ts_real_export["date"] = ts_real_export["date"].dt.strftime("%Y-%m-%d %H:%M:%S")
+        if not ts_real_export.empty:
+            ts_real_export["date"] = pd.to_datetime(ts_real_export["date"]).dt.strftime("%Y-%m-%d %H:%M:%S")
         st.download_button(
             "Скачать Time Series (real prizes, win_date) CSV",
             data=ts_real_export.to_csv(index=False).encode("utf-8"),
