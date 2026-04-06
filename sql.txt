@@ -1,6 +1,6 @@
 SELECT 
 	q.id,
-	q.product_campaign_id,
+	q.product_id,
 	q.prize_id,
 	q.customer_id,
 	q.win_date,

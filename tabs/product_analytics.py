@@ -14,16 +14,19 @@ def load_product_mapping():
 def render_product_analytics(df, USER_COL, local_tz):
     st.header("Анализ продуктов и категорий")
 
-    if "product_campaign_id" not in df.columns:
-        st.error("Колонка product_campaign_id отсутствует в данных.")
+    # Check for both old and new names (prioritize 'product_id')
+    pid_col = next((c for c in ["product_id", "product_campaign_id"] if c in df.columns), None)
+
+    if not pid_col:
+        st.error("Колонка product_id (или product_campaign_id) отсутствует в данных.")
         return
 
     if not USER_COL:
         st.error("Не выбран идентификатор пользователя.")
         return
 
-    # Оставляем только строки с известным product_campaign_id
-    pdf = df.dropna(subset=["product_campaign_id"]).copy()
+    # Оставляем только строки с известным продуктом
+    pdf = df.dropna(subset=[pid_col]).copy()
     
     if pdf.empty:
         st.warning("Нет данных о сканированиях продуктов с учетом текущих фильтров.")
@@ -43,7 +46,7 @@ def render_product_analytics(df, USER_COL, local_tz):
 
     # --- 2. Product Summary ---
     st.subheader("2. Сводная информация по продуктам")
-    summary_df = pdf.groupby(["product_category", "product_campaign_id_str", "product_name"]).agg(
+    summary_df = pdf.groupby(["product_category", "product_id_str", "product_name"]).agg(
         scans=("product_name", "count"),
         unique_users=(USER_COL, "nunique")
     ).reset_index().sort_values("scans", ascending=False)

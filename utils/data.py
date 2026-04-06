@@ -69,25 +69,30 @@ def get_user_col(df: pd.DataFrame):
 
 def enrich_with_product_info(df):
     mapping_path = os.path.join("utils", "product_mapping.json")
-    if os.path.exists(mapping_path) and "product_campaign_id" in df.columns:
+    
+    # Identify the product ID column (prioritize new name 'product_id')
+    pid_col = next((c for c in ["product_id", "product_campaign_id"] if c in df.columns), None)
+    
+    if os.path.exists(mapping_path) and pid_col:
         with open(mapping_path, "r", encoding="utf-8") as f:
             mapping = json.load(f)
         
-        # Normalize product_campaign_id to string and clean it
-        # Extract ID part if it's numeric or has .0
+        # Normalize to string and clean it
         def _normalize_id(val):
             if pd.isna(val) or val == "": return "None"
             s = str(val)
             s = re.sub(r'\.0$', '', s)
             return s.strip()
 
-        df["product_campaign_id_str"] = df["product_campaign_id"].apply(_normalize_id)
+        df["product_id_str"] = df[pid_col].apply(_normalize_id)
         
-        df["product_name"] = df["product_campaign_id_str"].apply(lambda x: mapping.get(x, {}).get("name", f"ID {x}"))
-        df["product_category"] = df["product_campaign_id_str"].apply(lambda x: mapping.get(x, {}).get("category", "Unknown"))
+        df["product_name"] = df["product_id_str"].apply(lambda x: mapping.get(x, {}).get("name", f"ID {x}"))
+        df["product_category"] = df["product_id_str"].apply(lambda x: mapping.get(x, {}).get("category", "Unknown"))
     else:
         if "product_name" not in df.columns:
             df["product_name"] = "Unknown"
         if "product_category" not in df.columns:
             df["product_category"] = "Unknown"
+        if "product_id_str" not in df.columns:
+            df["product_id_str"] = "None"
     return df
