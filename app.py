@@ -70,94 +70,72 @@ USER_LABEL = USER_COL
 
 local_tz = st.sidebar.selectbox("Часовой пояс отображения", ["UTC","Asia/Yerevan"], index=1)
 
-# --- Quick Filters Buttons ---
-q_cols = st.sidebar.columns(3)
-
-# A. Chips Button
-if q_cols[0].button("🏆 Чипсы", help="Розыгрыш чипсов с 11.12.2025 (created) / 15.01.2026 (win)"):
-    if "region_name" in df.columns:
-        st.session_state["region_filter"] = ["Armenia"]
+# --- Quick Filters Buttons (Ready-made Templates) ---
+with st.sidebar.expander("📍 Готовые шаблоны", expanded=True):
+    tpl_cols = st.columns(2)
     
-    if "created_date" in df.columns:
-        q_start = pd.Timestamp("2025-12-11").tz_localize(local_tz) if local_tz != "UTC" else pd.Timestamp("2025-12-11").tz_localize("UTC")
-        temp_df = df[df["region_name"] == "Armenia"] if "region_name" in df.columns else df
-        q_max = temp_df["created_date"].max()
-        if pd.notna(q_max):
-            q_max = q_max.tz_convert(local_tz) if local_tz != "UTC" else q_max.tz_convert("UTC")
-        else:
-            q_max = q_start
-        if q_max < q_start: q_max = q_start
-        st.session_state["created_date_filter"] = (q_start.to_pydatetime(), q_max.to_pydatetime())
+    # Helper to apply template logic
+    def _apply_tpl(region_name, c_start=None, c_end=None, w_start=None, w_end=None):
+        if "region_name" in df.columns:
+            st.session_state["region_filter"] = [region_name]
+        
+        def _get_tz_ts(val):
+            if val is None: return None
+            return pd.Timestamp(val).tz_localize(local_tz) if local_tz != "UTC" else pd.Timestamp(val).tz_localize("UTC")
 
-    if "win_date" in df.columns:
-        w_start = pd.Timestamp("2026-01-15").tz_localize(local_tz) if local_tz != "UTC" else pd.Timestamp("2026-01-15").tz_localize("UTC")
-        temp_df = df[df["region_name"] == "Armenia"] if "region_name" in df.columns else df
-        w_max = temp_df["win_date"].max()
-        if pd.notna(w_max):
-            w_max = w_max.tz_convert(local_tz) if local_tz != "UTC" else w_max.tz_convert("UTC")
-        else:
-            w_max = w_start
-        if w_max < w_start: w_max = w_start
-        st.session_state["win_date_filter"] = (w_start.to_pydatetime(), w_max.to_pydatetime())
-    st.rerun()
+        # 1. Created Date Filter
+        if "created_date" in df.columns:
+            ts_start = _get_tz_ts(c_start)
+            ts_end = _get_tz_ts(c_end)
+            
+            temp_df = df[df["region_name"] == region_name] if "region_name" in df.columns else df
+            if ts_start is None:
+                ts_start = temp_df["created_date"].min()
+                if pd.notna(ts_start): ts_start = ts_start.tz_convert(local_tz) if local_tz != "UTC" else ts_start.tz_convert("UTC")
+            if ts_end is None:
+                ts_end = temp_df["created_date"].max()
+                if pd.notna(ts_end): ts_end = ts_end.tz_convert(local_tz) if local_tz != "UTC" else ts_end.tz_convert("UTC")
+            
+            # Fallbacks & Consistency
+            if pd.isna(ts_start): ts_start = pd.Timestamp.now(tz=local_tz) - pd.Timedelta(days=30)
+            if pd.isna(ts_end): ts_end = pd.Timestamp.now(tz=local_tz)
+            if ts_start > ts_end: ts_start = ts_end - pd.Timedelta(hours=1)
+            
+            st.session_state["created_date_filter"] = (ts_start.to_pydatetime(), ts_end.to_pydatetime())
 
-# B. Seeds Button
-if q_cols[1].button("🌻 Семечки", help="Розыгрыш семечек: до 09.12.2025 (created) / с 16.12.2025 (win)"):
-    if "region_name" in df.columns:
-        st.session_state["region_filter"] = ["Armenia"]
-    
-    if "created_date" in df.columns:
-        q_end = pd.Timestamp("2025-12-09 23:59:59").tz_localize(local_tz) if local_tz != "UTC" else pd.Timestamp("2025-12-09 23:59:59").tz_localize("UTC")
-        temp_df = df[df["region_name"] == "Armenia"] if "region_name" in df.columns else df
-        q_min = temp_df["created_date"].min()
-        if pd.notna(q_min):
-            q_min = q_min.tz_convert(local_tz) if local_tz != "UTC" else q_min.tz_convert("UTC")
-        else:
-            q_min = q_end - pd.Timedelta(days=30) # fallback
-        if q_min > q_end: q_min = q_end - pd.Timedelta(hours=1)
-        st.session_state["created_date_filter"] = (q_min.to_pydatetime(), q_end.to_pydatetime())
+        # 2. Win Date Filter
+        if "win_date" in df.columns:
+            ts_start = _get_tz_ts(w_start)
+            ts_end = _get_tz_ts(w_end)
+            
+            temp_df = df[df["region_name"] == region_name] if "region_name" in df.columns else df
+            if ts_start is None:
+                ts_start = temp_df["win_date"].min()
+                if pd.notna(ts_start): ts_start = ts_start.tz_convert(local_tz) if local_tz != "UTC" else ts_start.tz_convert("UTC")
+            if ts_end is None:
+                ts_end = temp_df["win_date"].max()
+                if pd.notna(ts_end): ts_end = ts_end.tz_convert(local_tz) if local_tz != "UTC" else ts_end.tz_convert("UTC")
 
-    if "win_date" in df.columns:
-        w_start = pd.Timestamp("2025-12-16 00:00:00").tz_localize(local_tz) if local_tz != "UTC" else pd.Timestamp("2025-12-16 00:00:00").tz_localize("UTC")
-        temp_df = df[df["region_name"] == "Armenia"] if "region_name" in df.columns else df
-        w_max = temp_df["win_date"].max()
-        if pd.notna(w_max):
-            w_max = w_max.tz_convert(local_tz) if local_tz != "UTC" else w_max.tz_convert("UTC")
-        else:
-            w_max = w_start
-        if w_max < w_start: w_max = w_start
-        st.session_state["win_date_filter"] = (w_start.to_pydatetime(), w_max.to_pydatetime())
-    st.rerun()
+            if pd.isna(ts_start): ts_start = pd.Timestamp.now(tz=local_tz) - pd.Timedelta(days=30)
+            if pd.isna(ts_end): ts_end = pd.Timestamp.now(tz=local_tz)
+            if ts_start > ts_end: ts_start = ts_end - pd.Timedelta(hours=1)
+            
+            st.session_state["win_date_filter"] = (ts_start.to_pydatetime(), ts_end.to_pydatetime())
+        
+        st.rerun()
 
-# C. Seeds Phase 1 Button
-if q_cols[2].button("🌱 1 этап", help="1 этап семечек: до 09.12.2025 (created) / до 10.12.2025 (win)"):
-    if "region_name" in df.columns:
-        st.session_state["region_filter"] = ["Armenia"]
-    
-    if "created_date" in df.columns:
-        q_end = pd.Timestamp("2025-12-09 23:59:59").tz_localize(local_tz) if local_tz != "UTC" else pd.Timestamp("2025-12-09 23:59:59").tz_localize("UTC")
-        temp_df = df[df["region_name"] == "Armenia"] if "region_name" in df.columns else df
-        q_min = temp_df["created_date"].min()
-        if pd.notna(q_min):
-            q_min = q_min.tz_convert(local_tz) if local_tz != "UTC" else q_min.tz_convert("UTC")
-        else:
-            q_min = q_end - pd.Timedelta(days=30) # fallback
-        if q_min > q_end: q_min = q_end - pd.Timedelta(hours=1)
-        st.session_state["created_date_filter"] = (q_min.to_pydatetime(), q_end.to_pydatetime())
+    # Button Grid
+    if tpl_cols[0].button("Чипсы", help="Розыгрыш чипсов (Армения) с 11.12.2025", width="stretch"):
+        _apply_tpl("Armenia", c_start="2025-12-11", w_start="2026-01-15")
 
-    if "win_date" in df.columns:
-        w_start = pd.Timestamp("2025-09-15 00:00:00").tz_localize(local_tz) if local_tz != "UTC" else pd.Timestamp("2025-09-15 00:00:00").tz_localize("UTC")
-        w_end = pd.Timestamp("2025-12-10 23:59:59").tz_localize(local_tz) if local_tz != "UTC" else pd.Timestamp("2025-12-10 23:59:59").tz_localize("UTC")
-        temp_df = df[df["region_name"] == "Armenia"] if "region_name" in df.columns else df
-        w_min = temp_df["win_date"].min()
-        if pd.notna(w_min):
-            w_min = w_min.tz_convert(local_tz) if local_tz != "UTC" else w_min.tz_convert("UTC")
-            if w_min < w_start: w_min = w_start
-        else:
-            w_min = w_start
-        if w_min > w_end: w_min = w_end - pd.Timedelta(hours=1)
-        st.session_state["win_date_filter"] = (w_min.to_pydatetime(), w_end.to_pydatetime())
-    st.rerun()
+    if tpl_cols[1].button("Семечки продолжения", help="Розыгрыш семечек (Армения): с 16.12.2025 (win)", width="stretch"):
+        _apply_tpl("Armenia", c_end="2025-12-09 23:59:59", w_start="2025-12-16 00:00:00")
+
+    if tpl_cols[0].button("Семечки 1", help="1 этап семечек (Армения): 15.09 - 10.12", width="stretch"):
+        _apply_tpl("Armenia", c_end="2025-12-09 23:59:59", w_start="2025-09-15 00:00:00", w_end="2025-12-10 23:59:59")
+
+    if tpl_cols[1].button("Грузия 2", help="Регион 1 (Грузия), расчет с 20.04.2026", width="stretch"):
+        _apply_tpl("Georgia", c_start="2026-04-07 00:00:00", w_start="2026-04-20 00:00:00")
 
 # --- 1. Global Segmentation (Pre-Filter) ---
 if USER_COL:
