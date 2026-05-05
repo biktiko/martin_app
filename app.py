@@ -1,4 +1,4 @@
-import streamlit as st
+import streamlit as st # reload trigger
 import pandas as pd
 import datetime as dt
 
@@ -9,6 +9,7 @@ from utils.data import load_data, process_data, get_user_col
 from tabs.basic_analytics import render_basic_analytics
 from tabs.advanced_analytics import render_advanced_analytics
 from tabs.product_analytics import render_product_analytics
+from tabs.prize_impact import render_prize_impact
 
 # ----------------------------- Config & Auth ----------------------------------
 st.set_page_config(page_title="QR Code Analytics", layout="wide")
@@ -363,7 +364,7 @@ else:
 st.title("QR Code Analytics")
 
 # Tabs
-tab_basic, tab_advanced, tab_products = st.tabs(["Базовая аналитика", "Advanced Analytics", "Анализ продуктов"])
+tab_basic, tab_advanced, tab_products, tab_prize_impact = st.tabs(["Базовая аналитика", "Advanced Analytics", "Анализ продуктов", "Влияние призов"])
 
 with tab_basic:
     render_basic_analytics(
@@ -391,6 +392,13 @@ with tab_advanced:
 with tab_products:
     render_product_analytics(
         df=work,
+        USER_COL=USER_COL,
+        local_tz=local_tz
+    )
+
+with tab_prize_impact:
+    render_prize_impact(
+        df=filtered_df, # pass filtered_df to get all history, not just the currently selected date range
         USER_COL=USER_COL,
         local_tz=local_tz
     )
