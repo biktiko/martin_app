@@ -5,11 +5,12 @@ import datetime as dt
 # Imports from our new modules
 from utils.auth import require_auth
 # from utils.db import check_db_connection
-from utils.data import load_data, process_data, get_user_col
+from utils.data import load_data, process_data, get_user_col, load_data_from_folder, get_folder_signature
 from tabs.basic_analytics import render_basic_analytics
 from tabs.advanced_analytics import render_advanced_analytics
 from tabs.product_analytics import render_product_analytics
 from tabs.prize_impact import render_prize_impact
+from tabs.kilogram_seeds import render_kilogram_seeds
 
 # ----------------------------- Config & Auth ----------------------------------
 st.set_page_config(page_title="QR Code Analytics", layout="wide")
@@ -22,30 +23,56 @@ require_auth()
 sidebar_top = st.sidebar.empty()
 
 st.sidebar.header("Загрузка данных")
-uploaded_file = st.sidebar.file_uploader("Выберите CSV файл", type="csv")
+uploaded_files = st.sidebar.file_uploader("Выберите CSV файлы", type="csv", accept_multiple_files=True)
 
 # Button to clear cache
 if st.sidebar.button("Обновить/очистить кэш данных"):
-    load_data.clear()
+    st.cache_data.clear()
     st.rerun()
-
+    
+@st.cache_data(show_spinner="Обработка данных...")
+def get_cached_processed_data(raw_data):
+    from utils.data import enrich_with_product_info
+    from utils.prizes import enrich_with_prize_name
+    
+    # Process data (add derived columns)
+    d = process_data(raw_data.copy())
+    
+    # Enrich with product info (names, categories)
+    d = enrich_with_product_info(d)
+    
+    # Enrich with prize names
+    d = enrich_with_prize_name(d)
+    return d
 
 # Load raw data
-if uploaded_file is not None:
-    raw_df = load_data(uploaded_file)
+if uploaded_files:
+    dfs = []
+    for f in uploaded_files:
+        dfs.append(load_data(f))
+    raw_df = pd.concat(dfs, ignore_index=True)
+    
+    # Remove duplicates by ID (others handled in process_data)
+    if not raw_df.empty and "id" in raw_df.columns:
+        raw_df = raw_df.drop_duplicates(subset=["id"], keep="first")
+            
+            
+    st.sidebar.success(f"Загружено файлов из интерфейса: {len(uploaded_files)}")
 else:
-    raw_df = load_data("qr_code.csv")
+    sig = get_folder_signature("csv_data")
+    raw_df = load_data_from_folder("csv_data", sig)
+    
+    # Show loaded files list in sidebar
+    import os
+    import glob
+    csv_files = sorted(glob.glob(os.path.join("csv_data", "*.csv")))
+    if csv_files:
+        with st.sidebar.expander(f"📁 Файлы в папке csv_data ({len(csv_files)})", expanded=False):
+            for f in csv_files:
+                st.write(f"- {os.path.basename(f)}")
 
-# Process data (add derived columns)
-df = process_data(raw_df.copy())
-
-# Enrich with product info (names, categories)
-from utils.data import enrich_with_product_info
-df = enrich_with_product_info(df)
-
-# Enrich with prize names
-from utils.prizes import enrich_with_prize_name
-df = enrich_with_prize_name(df)
+# Apply processing through the cached function
+df = get_cached_processed_data(raw_df)
 
 # Show data freshness
 if "win_date" in df.columns and not df.empty:
@@ -72,13 +99,19 @@ USER_LABEL = USER_COL
 local_tz = st.sidebar.selectbox("Часовой пояс отображения", ["UTC","Asia/Yerevan"], index=1)
 
 # --- Quick Filters Buttons (Ready-made Templates) ---
+if "exclude_product_31" not in st.session_state:
+    st.session_state["exclude_product_31"] = False
+
 with st.sidebar.expander("📍 Готовые шаблоны", expanded=True):
     tpl_cols = st.columns(2)
     
     # Helper to apply template logic
-    def _apply_tpl(region_name, c_start=None, c_end=None, w_start=None, w_end=None):
+    def _apply_tpl(region_name, c_start=None, c_end=None, w_start=None, w_end=None, exclude_product_31=False):
         if "region_name" in df.columns:
             st.session_state["region_filter"] = [region_name]
+        
+        st.session_state["exclude_product_31"] = exclude_product_31
+        st.session_state["win_type_filter"] = ["real_prize", "points", "no_win"]
         
         def _get_tz_ts(val):
             if val is None: return None
@@ -127,16 +160,19 @@ with st.sidebar.expander("📍 Готовые шаблоны", expanded=True):
 
     # Button Grid
     if tpl_cols[0].button("Чипсы", help="Розыгрыш чипсов (Армения) с 11.12.2025", width="stretch"):
-        _apply_tpl("Armenia", c_start="2025-12-11", w_start="2026-01-15")
+        _apply_tpl("Armenia", c_start="2025-12-11", w_start="2026-01-15", exclude_product_31=True)
 
     if tpl_cols[1].button("Семечки продолжения", help="Розыгрыш семечек (Армения): с 16.12.2025 (win)", width="stretch"):
-        _apply_tpl("Armenia", c_end="2025-12-09 23:59:59", w_start="2025-12-16 00:00:00")
+        _apply_tpl("Armenia", c_end="2025-12-09 23:59:59", w_start="2025-12-16 00:00:00", exclude_product_31=False)
 
     if tpl_cols[0].button("Семечки 1", help="1 этап семечек (Армения): 15.09 - 10.12", width="stretch"):
-        _apply_tpl("Armenia", c_end="2025-12-09 23:59:59", w_start="2025-09-15 00:00:00", w_end="2025-12-10 23:59:59")
+        _apply_tpl("Armenia", c_end="2025-12-09 23:59:59", w_start="2025-09-15 00:00:00", w_end="2025-12-10 23:59:59", exclude_product_31=False)
 
     if tpl_cols[1].button("Грузия 2", help="Регион 1 (Грузия), расчет с 20.04.2026", width="stretch"):
-        _apply_tpl("Georgia", c_start="2026-04-07 00:00:00", w_start="2026-04-20 00:00:00")
+        _apply_tpl("Georgia", c_start="2026-04-07 00:00:00", w_start="2026-04-20 00:00:00", exclude_product_31=False)
+
+    if tpl_cols[0].button("Денежные семечки", help="Армения, QR > 10.05.2026, Win > 17.05.2026", width="stretch"):
+        _apply_tpl("Armenia", c_start="2026-05-10 00:00:00", w_start="2026-05-17 00:00:00", exclude_product_31=False)
 
 # --- 1. Global Segmentation (Pre-Filter) ---
 if USER_COL:
@@ -155,6 +191,11 @@ else:
 
 # --- 2. Global Filters (Create filtered_df) ---
 filtered_df = df.copy()
+
+# Apply template-specific exclusions (e.g. exclude product_id 31 for Chips)
+if st.session_state.get("exclude_product_31", False) and "product_id" in filtered_df.columns:
+    filtered_df = filtered_df[filtered_df["product_id"].astype(str).str.split('.').str[0].str.strip() != "31"]
+    st.sidebar.info("🚫 Исключен продукт ID 31 (Чипсы)")
 
 # A. Region Filter
 if "region_name" in filtered_df.columns:
@@ -194,7 +235,9 @@ if "product_category" in filtered_df.columns:
 
 # D. Win Type Filter
 win_type_values = ["real_prize","points","no_win"]
-selected_win_types = st.sidebar.multiselect("Тип выигрыша", win_type_values, default=win_type_values)
+if "win_type_filter" not in st.session_state:
+    st.session_state["win_type_filter"] = win_type_values
+selected_win_types = st.sidebar.multiselect("Тип выигрыша", win_type_values, key="win_type_filter")
 filtered_df = filtered_df[filtered_df["win_type"].isin(selected_win_types)]
 
 # E. Received Filter
@@ -216,8 +259,8 @@ if "created_date" in filtered_df.columns:
             cd_max = cd_max.tz_convert(local_tz)
             
         # Ensure min < max
-        if cd_min > cd_max:
-             cd_min = cd_max
+        if cd_min >= cd_max:
+             cd_min = cd_max - pd.Timedelta(days=1)
 
         st.sidebar.markdown("---")
         # Clamp session state if it exists to avoid StreamlitValueAboveMaxError
@@ -297,9 +340,9 @@ if not work.empty:
     slider_min = max(start_dt_local, actual_min)
     slider_max = actual_max
 
-    # Check if min > max (can happen if data is weird or empty after filter)
-    if slider_min > slider_max:
-        slider_min = slider_max
+    # Check if min >= max (can happen if data is weird, empty, or has a single date after filter)
+    if slider_min >= slider_max:
+        slider_min = slider_max - pd.Timedelta(days=1)
 
     # Clamp session state for win_date to avoid StreamlitValueAboveMaxError
     if "win_date_filter" in st.session_state:
@@ -364,7 +407,7 @@ else:
 st.title("QR Code Analytics")
 
 # Tabs
-tab_basic, tab_advanced, tab_products, tab_prize_impact = st.tabs(["Базовая аналитика", "Advanced Analytics", "Анализ продуктов", "Влияние призов"])
+tab_basic, tab_advanced, tab_products, tab_prize_impact, tab_kg_seeds = st.tabs(["Базовая аналитика", "Advanced Analytics", "Анализ продуктов", "Влияние призов", "Килограммовые семечки"])
 
 with tab_basic:
     render_basic_analytics(
@@ -400,6 +443,14 @@ with tab_prize_impact:
     render_prize_impact(
         df=filtered_df, # pass filtered_df to get all history, not just the currently selected date range
         USER_COL=USER_COL,
+        local_tz=local_tz
+    )
+
+with tab_kg_seeds:
+    render_kilogram_seeds(
+        df=df, # use df to get all history for monetary prizes
+        USER_COL=USER_COL,
+        USER_LABEL=USER_LABEL,
         local_tz=local_tz
     )
 

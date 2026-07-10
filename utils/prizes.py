@@ -24,7 +24,11 @@ DEFAULT_PRIZES = {
     "37": "Asus Vivobook F1504GA-WS36 (Armenia)",
     "38": "JBL Flip 6 (Armenia)",
     "39": "AirPods 4 (Armenia)",
-    "40": "Բլենդեր (Armenia)"
+    "40": "Բլենդեր (Armenia)",
+    "54": "3000 դրամ",
+    "55": "5000 դրամ",
+    "56": "10000 դրամ",
+    "57": "20000 դրամ"
 }
 
 def load_prize_map():

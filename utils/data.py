@@ -3,13 +3,88 @@ import pandas as pd
 import json
 import os
 import re
+import glob
+import shutil
+
+CSV_FOLDER = "csv_data"
+
+def get_folder_signature(folder_path=CSV_FOLDER) -> str:
+    """
+    Generates a unique string signature based on the names, sizes, and last modified times
+    of all .csv files in the folder to handle automatic Streamlit cache invalidation.
+    """
+    if not os.path.exists(folder_path):
+        return ""
+    files = sorted(glob.glob(os.path.join(folder_path, "*.csv")))
+    sig_parts = []
+    for f in files:
+        try:
+            stat = os.stat(f)
+            sig_parts.append(f"{os.path.basename(f)}:{stat.st_size}:{stat.st_mtime}")
+        except Exception:
+            pass
+    return ",".join(sig_parts)
 
 @st.cache_data(show_spinner=False)
 def load_data(source) -> pd.DataFrame:
     df = pd.read_csv(source)
     return df
 
+@st.cache_data(show_spinner=False)
+def load_data_from_folder(folder_path=CSV_FOLDER, folder_signature: str = "") -> pd.DataFrame:
+    """
+    Loads all .csv files from the specified folder and combines their rows.
+    If the folder is empty but 'qr_code.csv' exists in the root, it copies it over first.
+    """
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path, exist_ok=True)
+
+    csv_files = glob.glob(os.path.join(folder_path, "*.csv"))
+    
+    # Auto-migration/fallback logic for the first run
+    if not csv_files:
+        root_default = "qr_code.csv"
+        if os.path.exists(root_default):
+            try:
+                shutil.copy(root_default, os.path.join(folder_path, root_default))
+                csv_files = glob.glob(os.path.join(folder_path, "*.csv"))
+            except Exception as e:
+                st.sidebar.error(f"Не удалось скопировать {root_default} в {folder_path}: {e}")
+
+    if not csv_files:
+        st.error(f"В папке '{folder_path}' не найдено ни одного .csv файла. Пожалуйста, добавьте CSV-файлы в эту папку.")
+        return pd.DataFrame()
+
+    dfs = []
+    for file in csv_files:
+        try:
+            df = pd.read_csv(file)
+            if not df.empty:
+                dfs.append(df)
+        except Exception as e:
+            st.error(f"Ошибка при чтении файла {os.path.basename(file)}: {e}")
+
+    if not dfs:
+        st.error("Не удалось прочитать данные ни из одного CSV файла в папке.")
+        return pd.DataFrame()
+
+    # Combine all dataframes
+    combined_df = pd.concat(dfs, ignore_index=True)
+    
+    if not combined_df.empty:
+        # Deduplicate by primary key "id" if available
+        if "id" in combined_df.columns:
+            combined_df = combined_df.drop_duplicates(subset=["id"], keep="first")
+            
+    return combined_df
+
+
 def process_data(df: pd.DataFrame) -> pd.DataFrame:
+    # Exclude scans from user 21541 (the user themselves) from the entire dataset
+    user_col = next((c for c in ["customer_id", "user_id"] if c in df.columns), None)
+    if user_col and user_col in df.columns:
+        df = df[df[user_col].astype(str).str.split('.').str[0].str.strip() != "21541"]
+
     # Identify date columns
     DATE_COLS = [
         "activation_date","prize_receive_date","prize_delivery_date",
@@ -17,7 +92,10 @@ def process_data(df: pd.DataFrame) -> pd.DataFrame:
     ]
     for c in DATE_COLS:
         if c in df.columns:
-            df[c] = pd.to_datetime(df[c], errors="coerce", utc=True)
+            # Optimization: cache unique values to speed up datetime conversion
+            unique_dates = df[c].dropna().unique()
+            date_dict = {d: pd.to_datetime(d, errors="coerce", utc=True) for d in unique_dates}
+            df[c] = df[c].map(date_dict)
 
     # --- Derived semantic columns ---
     # Normalize prize_id
@@ -60,7 +138,15 @@ def process_data(df: pd.DataFrame) -> pd.DataFrame:
         df["region_name"] = df["region_id"].map(REGION_MAP).fillna(df["region_id"].astype(str))
     else:
         df["region_name"] = "Unknown"
+
+    # Fill missing win_date with created_date for no_win scans so they are not dropped
+    if "win_date" in df.columns and "created_date" in df.columns:
+        df["win_date"] = df["win_date"].fillna(df["created_date"])
         
+    # Deduplicate by win_date + customer_id now that dates are normalized
+    if user_col and "win_date" in df.columns:
+        df = df.drop_duplicates(subset=["win_date", user_col], keep="first")
+
     return df
 
 def get_user_col(df: pd.DataFrame):
